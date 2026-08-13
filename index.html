@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CXE Codesheet Converter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --paper:#eef2f4; --card:#ffffff; --ink:#17242e; --ink-soft:#5b6b76;
+    --line:#d8dfe4; --accent:#0097a8; --accent-deep:#00727f;
+    --ok:#2e8b57; --warn:#e8a13d; --bad:#d64545;
+    --mono:'Source Code Pro',monospace; --sans:'Source Sans 3','Source Sans Pro',sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--sans);background:var(--paper);color:var(--ink);font-size:14.5px;line-height:1.5}
+
+  header{background:var(--ink);color:#fff;padding:14px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .brand{font-weight:700;font-size:16px}
+  .brand .stamp{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--paper);
+    background:var(--accent);padding:2px 7px;border-radius:3px;margin-left:8px;letter-spacing:.12em;vertical-align:2px}
+  .spacer{flex:1}
+  .privacy{font-family:var(--mono);font-size:11.5px;color:#c6d2da}
+
+  main{max-width:1040px;margin:22px auto;padding:0 18px;display:grid;gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:18px}
+  .card h2{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:12px}
+  .head-row{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+  .head-row h2{margin-bottom:0}
+
+  .drop{border:1.5px dashed var(--line);border-radius:8px;padding:26px 14px;text-align:center;
+        color:var(--ink-soft);cursor:pointer;transition:border-color .2s, background .2s;font-size:13px}
+  .drop.over{border-color:var(--accent);background:#f0fafb}
+  .drop b{color:var(--ink)}
+  .filechip{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;
+    background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:3px 11px;margin-top:10px}
+
+
+  .btn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:5px 10px;
+    font-family:var(--sans);font-weight:600;font-size:12.5px;color:var(--ink);cursor:pointer}
+  .btn:hover{border-color:var(--accent);color:var(--accent-deep)}
+  button.primary{border:none;border-radius:6px;padding:11px 22px;font-weight:700;font-size:14px;
+    font-family:var(--sans);cursor:pointer;background:var(--accent);color:#fff}
+  button.primary:hover{background:var(--accent-deep)}
+  button.primary:disabled{opacity:.45;cursor:not-allowed}
+
+  .notes{font-size:13px;color:var(--ink-soft)}
+  .notes li{margin:3px 0 3px 18px}
+  .notes b{color:var(--ink)}
+  .ok{color:var(--ok);font-weight:600}
+  .bad{color:var(--bad);font-weight:600}
+
+  .tablewrap{overflow:auto;max-height:420px;border:1px solid var(--line);border-radius:6px}
+  table{border-collapse:collapse;font-size:12.5px;width:100%}
+  th{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);
+     text-align:left;padding:6px 9px;border-bottom:2px solid var(--line);background:#f7fafb;position:sticky;top:0;white-space:nowrap}
+  td{padding:5px 9px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px;white-space:nowrap}
+  .empty{color:var(--ink-soft);text-align:center;padding:32px 10px;font-size:13px}
+  .counts{font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
+  .counts b{color:var(--ink)}
+
+  .toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
+         padding:11px 18px;border-radius:6px;font-size:13.5px;z-index:60;box-shadow:0 4px 14px rgba(0,0,0,.25);max-width:90vw}
+  .toast.err{background:#b23434}
+  @media (prefers-reduced-motion: reduce){*{transition:none !important}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">CXE Codesheet Converter <span class="stamp">FLIPP INTERNAL</span></div>
+  <div class="spacer"></div>
+  <div class="privacy">files are processed in your browser — nothing is uploaded</div>
+</header>
+
+<main>
+  <!-- ============ 1 · FILE ============ -->
+  <section class="card">
+    <h2>1 · Codesheet file</h2>
+    <div class="drop" id="dropZone">
+      Drop a rough codesheet here (or click) — <b>.csv</b>, <b>.xlsx</b>, or <b>.xls</b>.
+      <div id="fileChipWrap"></div>
+    </div>
+    <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" hidden>
+  </section>
+
+  <!-- ============ 2 · RETAILER ============ -->
+  <section class="card">
+    <h2>2 · Select retailer</h2>
+    <select id="retailerSelect" style="max-width:280px;border:1px solid var(--line);border-radius:6px;
+      padding:9px 11px;font-family:var(--sans);font-size:14px;color:var(--ink);background:#fff">
+      <option value="">Choose a retailer…</option>
+      <option value="vallarta">Vallarta</option>
+      <option value="sprouts">Sprouts</option>
+    </select>
+    <div class="notes" id="detectNote" style="margin-top:8px"></div>
+  </section>
+
+  <!-- ============ 3 · RUN ============ -->
+  <section class="card">
+    <div class="head-row">
+      <h2>3 · Result</h2>
+      <span class="counts" id="resultCounts"></span>
+      <span class="spacer"></span>
+      <span id="dlWrap" style="display:none">
+        <select id="dlFormat" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;
+          font-family:var(--sans);font-size:12.5px;background:#fff">
+          <option value="csv">.csv</option>
+          <option value="xlsx">.xlsx</option>
+        </select>
+        <button class="btn" id="downloadBtn">⬇ Download</button>
+      </span>
+    </div>
+    <button class="primary" id="runBtn" disabled>Run conversion</button>
+    <ul class="notes" id="runNotes" style="margin-top:12px"></ul>
+    <div class="tablewrap" id="previewWrap" style="display:none;margin-top:12px"></div>
+    <div class="empty" id="previewEmpty">Drop a file and run the conversion — a preview of the output appears here.</div>
+  </section>
+</main>
+
+<script>
+/* ==================================================================
+ * State
+ * ================================================================== */
+var state = { grid:null, fileName:'', format:null, autoFormat:null, output:null, outName:'' };
+
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function toast(msg, isErr){
+  var t=document.createElement('div'); t.className='toast'+(isErr?' err':''); t.textContent=msg;
+  document.body.appendChild(t); setTimeout(function(){ t.remove(); }, isErr?7000:3500);
+}
+function isEmpty(v){ return v===null || v===undefined || String(v).trim()===''; }
+
+/* ==================================================================
+ * Transformations — direct port of the fadmin gem's pandas logic
+ * ================================================================== */
+
+// ---- FORMAT 1: VALLARTA ----
+function processVallarta(grid){
+  var notes = [];
+  // find header row: first row containing "Versions"
+  var headerIdx = grid.findIndex(function(row){
+    return row.some(function(c){ return !isEmpty(c) && String(c).indexOf('Versions') !== -1; });
+  });
+  if(headerIdx === -1) throw new Error('Couldn\u2019t find a header row containing "Versions" — is this a Vallarta codesheet?');
+  notes.push('Header row found at sheet row <b>'+(headerIdx+1)+'</b>.');
+
+  var width = Math.max.apply(null, grid.map(function(r){ return r.length; }));
+  var headers = [];
+  for(var c=0;c<width;c++) headers.push(isEmpty(grid[headerIdx][c]) ? '' : String(grid[headerIdx][c]).trim());
+
+  // data = rows after header (this captures VER-1 — the "+1" fix from the gem)
+  var data = grid.slice(headerIdx+1).map(function(r){
+    var row=[]; for(var c=0;c<width;c++) row.push(r[c]===undefined?null:r[c]); return row;
+  });
+
+  // drop columns entirely empty across the data rows
+  var keep = [];
+  for(var c=0;c<width;c++){
+    var any = data.some(function(r){ return !isEmpty(r[c]); });
+    if(any) keep.push(c);
+  }
+  var droppedCols = width - keep.length;
+  if(droppedCols) notes.push('Dropped <b>'+droppedCols+'</b> empty column(s).');
+  headers = keep.map(function(c){ return headers[c]; });
+  data = data.map(function(r){ return keep.map(function(c){ return r[c]; }); });
+
+  // drop rows where Versions is empty
+  var vCol = headers.findIndex(function(h){ return h === 'Versions'; });
+  if(vCol === -1) vCol = headers.findIndex(function(h){ return h.indexOf('Versions') !== -1; });
+  var before = data.length;
+  data = data.filter(function(r){ return !isEmpty(r[vCol]); });
+  if(before - data.length) notes.push('Removed <b>'+(before-data.length)+'</b> row(s) with no Versions value.');
+
+  // clean Stores: strip ( ), "/" -> ", "
+  var sCol = headers.findIndex(function(h){ return h === 'Stores'; });
+  if(sCol !== -1){
+    data.forEach(function(r){
+      if(!isEmpty(r[sCol])){
+        r[sCol] = String(r[sCol]).split('(').join('').split(')').join('').split('/').join(', ').trim();
+      }
+    });
+    notes.push('Cleaned the <b>Stores</b> column (removed brackets, slashes → commas).');
+  } else {
+    notes.push('No <b>Stores</b> column found — skipped that cleanup.');
+  }
+
+  // Page columns: append .pdf to non-empty values
+  var pageCols = [];
+  headers.forEach(function(h,i){ if(String(h).indexOf('Page')===0) pageCols.push(i); });
+  var pdfCount = 0;
+  data.forEach(function(r){
+    pageCols.forEach(function(c){
+      if(!isEmpty(r[c])){ r[c] = String(r[c]).trim() + '.pdf'; pdfCount++; }
+    });
+  });
+  notes.push('Appended <b>.pdf</b> to '+pdfCount+' file name(s) across '+pageCols.length+' Page column(s).');
+
+  return { rows:[headers].concat(data), notes:notes, outName:'vallarta_processed_output.csv',
+           summary: data.length+' version rows · '+headers.length+' columns' };
+}
+
+// ---- FORMAT 2: SPROUTS ----
+function fmtMDY(y, m, d){ return m+'/'+d+'/'+y; }
+function processSprouts(grid){
+  var notes = [];
+  // work on a deep-ish copy
+  grid = grid.map(function(r){ return r.slice(); });
+
+  // 1. AdDate at row 3, col 2 (0-indexed [2][1]) → M/D/YYYY
+  if(grid[2] && grid[2][1] !== undefined && !isEmpty(grid[2][1])){
+    var v = grid[2][1];
+    if(v instanceof Date){
+      grid[2][1] = fmtMDY(v.getFullYear(), v.getMonth()+1, v.getDate());
+      notes.push('Reformatted <b>AdDate</b> to '+grid[2][1]+'.');
+    } else if(String(v).indexOf('-') !== -1){
+      var p = String(v).trim().split(/[T ]/)[0].split('-');
+      if(p.length===3 && !isNaN(+p[0]) && !isNaN(+p[1]) && !isNaN(+p[2])){
+        grid[2][1] = fmtMDY(+p[0], +p[1], +p[2]);
+        notes.push('Reformatted <b>AdDate</b> to '+grid[2][1]+'.');
+      }
+    }
+  }
+
+  // 2. find header row: first row containing "Version Code"
+  var headerIdx = grid.findIndex(function(row){
+    return row.some(function(c){ return !isEmpty(c) && String(c).indexOf('Version Code') !== -1; });
+  });
+  if(headerIdx === -1) throw new Error('Couldn\u2019t find a header row containing "Version Code" — is this a Sprouts codesheet?');
+  notes.push('Header row found at sheet row <b>'+(headerIdx+1)+'</b>.');
+
+  // 3. drop trailing empty / "Total # of Versions" rows (only below the header)
+  var kept = [], droppedRows = 0;
+  grid.forEach(function(row, idx){
+    if(idx <= headerIdx){ kept.push(row); return; }
+    var c0 = row[0], c1 = row.length>1 ? row[1] : null;
+    var c1s = isEmpty(c1) ? '' : String(c1);
+    if(isEmpty(c0) && (isEmpty(c1) || c1s.indexOf('Total') !== -1)){ droppedRows++; return; }
+    kept.push(row);
+  });
+  if(droppedRows) notes.push('Removed <b>'+droppedRows+'</b> summary/empty row(s) (e.g. "Total # of Versions").');
+  grid = kept;
+
+  // 4. drop columns completely empty in the data section (rows after the header)
+  var width = Math.max.apply(null, grid.map(function(r){ return r.length; }));
+  var dataSection = grid.slice(headerIdx+1);
+  var keep = [];
+  for(var c=0;c<width;c++){
+    var any = dataSection.some(function(r){ return !isEmpty(r[c]); });
+    if(any) keep.push(c);
+  }
+  var droppedCols = width - keep.length;
+  if(droppedCols) notes.push('Dropped <b>'+droppedCols+'</b> empty column(s).');
+  grid = grid.map(function(r){ return keep.map(function(c){ return r[c]===undefined?null:r[c]; }); });
+
+  // 5. export as-is (no added header row — matches header=False in the gem)
+  return { rows:grid, notes:notes, outName:'sprouts_processed_output.csv',
+           summary:(grid.length-headerIdx-1)+' data rows · '+keep.length+' columns (metadata rows kept on top)' };
+}
+
+/* ==================================================================
+ * File handling
+ * ================================================================== */
+function detectFormat(grid){
+  var joined = grid.slice(0,40).map(function(r){ return r.map(function(c){ return isEmpty(c)?'':String(c); }).join('|'); }).join('\n');
+  if(joined.indexOf('Version Code') !== -1) return 'sprouts';
+  if(joined.indexOf('Versions') !== -1) return 'vallarta';
+  return null;
+}
+
+function handleFile(file){
+  var reader = new FileReader();
+  reader.onload = function(ev){
+    try{
+      var wb = XLSX.read(ev.target.result, {type:'array', cellDates:true});
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      var grid = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:false});
+      if(!grid.length){ toast('That file looks empty.', true); return; }
+      state.grid = grid; state.fileName = file.name; state.output = null;
+      $('fileChipWrap').innerHTML = '<span class="filechip">📄 '+esc(file.name)+' · '+grid.length+' rows</span>';
+      // auto-detect
+      state.autoFormat = detectFormat(grid);
+      if(state.autoFormat){
+        selectFormat(state.autoFormat, true);
+      } else {
+        selectFormat(null, false);
+        $('detectNote').innerHTML = '<span class="bad">Couldn\u2019t auto-detect the retailer</span> — choose one from the dropdown before running.';
+      }
+      resetResult();
+      updateRun();
+      toast('Loaded '+file.name+'.');
+    }catch(err){ toast('Couldn\u2019t read that file: '+err.message, true); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+var dz=$('dropZone');
+dz.onclick = function(){ $('fileInput').click(); };
+$('fileInput').addEventListener('change', function(){ if(this.files[0]) handleFile(this.files[0]); this.value=''; });
+['dragover','dragenter'].forEach(function(ev){ dz.addEventListener(ev, function(e){ e.preventDefault(); dz.classList.add('over'); }); });
+['dragleave','drop'].forEach(function(ev){ dz.addEventListener(ev, function(e){ e.preventDefault(); dz.classList.remove('over'); }); });
+dz.addEventListener('drop', function(e){ if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+
+/* ==================================================================
+ * Format selection
+ * ================================================================== */
+function selectFormat(fmt, auto){
+  state.format = fmt || null;
+  $('retailerSelect').value = fmt || '';
+  $('detectNote').innerHTML = fmt
+    ? (auto ? 'Auto-detected as <b>'+(fmt==='vallarta'?'Vallarta':'Sprouts')+'</b> — change the dropdown if that\u2019s wrong.' : '')
+    : '';
+  resetResult(); updateRun();
+}
+$('retailerSelect').addEventListener('change', function(){ selectFormat(this.value, false); });
+
+/* ==================================================================
+ * Run + output
+ * ================================================================== */
+function updateRun(){ $('runBtn').disabled = !(state.grid && state.format); }
+function resetResult(){
+  state.output=null;
+  $('runNotes').innerHTML=''; $('resultCounts').textContent='';
+  $('previewWrap').style.display='none'; $('previewEmpty').style.display='';
+  $('dlWrap').style.display='none';
+}
+
+$('runBtn').onclick = function(){
+  if(!state.grid || !state.format) return;
+  try{
+    var res = state.format==='vallarta' ? processVallarta(state.grid) : processSprouts(state.grid);
+    state.output = res.rows; state.outName = res.outName;
+    $('runNotes').innerHTML = '<li class="ok">Done — preview below. Spot-check a few rows before uploading to fadmin.</li>';
+    $('resultCounts').innerHTML = '<b>'+res.summary+'</b>';
+    renderPreview(res.rows);
+    $('dlWrap').style.display='';
+    toast('Conversion complete.');
+  }catch(err){
+    resetResult();
+    $('runNotes').innerHTML = '<li class="bad">'+esc(err.message)+'</li>';
+    toast(err.message, true);
+  }
+};
+
+function renderPreview(rows){
+  var maxRows = 60, maxCols = 30;
+  var html = '<table><thead><tr>';
+  var width = Math.min(maxCols, Math.max.apply(null, rows.map(function(r){ return r.length; })));
+  for(var c=0;c<width;c++) html += '<th>'+esc(String.fromCharCode(65+(c%26)))+(c>=26?Math.floor(c/26):'')+'</th>';
+  html += '</tr></thead><tbody>';
+  rows.slice(0, maxRows).forEach(function(r){
+    html += '<tr>';
+    for(var c=0;c<width;c++) html += '<td>'+esc(isEmpty(r[c])?'':r[c])+'</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  $('previewWrap').innerHTML = html;
+  $('previewWrap').style.display='';
+  $('previewEmpty').style.display='none';
+  if(rows.length > maxRows) $('resultCounts').innerHTML += ' <span style="color:var(--ink-soft)">(previewing first '+maxRows+' rows)</span>';
+}
+
+$('downloadBtn').onclick = function(){
+  if(!state.output) return;
+  var fmt = $('dlFormat').value;
+  if(fmt === 'xlsx'){
+    var rows = state.output.map(function(r){ return r.map(function(c){ return isEmpty(c) ? null : c; }); });
+    var ws = XLSX.utils.aoa_to_sheet(rows);
+    var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Processed');
+    XLSX.writeFile(wb, state.outName.replace(/\.csv$/,'') + '.xlsx');
+    return;
+  }
+  var csv = state.output.map(function(r){
+    return r.map(function(c){
+      var v = isEmpty(c) ? '' : String(c);
+      return /[",\n\r]/.test(v) ? '"'+v.split('"').join('""')+'"' : v;
+    }).join(',');
+  }).join('\r\n');
+  var blob = new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = state.outName;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
+};
+</script>
+</body>
+</html>
