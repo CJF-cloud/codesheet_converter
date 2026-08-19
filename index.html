@@ -41,6 +41,8 @@
   .btn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:5px 10px;
     font-family:var(--sans);font-weight:600;font-size:12.5px;color:var(--ink);cursor:pointer}
   .btn:hover{border-color:var(--accent);color:var(--accent-deep)}
+  .btn:disabled, select:disabled{opacity:.45;cursor:not-allowed}
+  .btn:disabled:hover{border-color:var(--line);color:var(--ink)}
   button.primary{border:none;border-radius:6px;padding:11px 22px;font-weight:700;font-size:14px;
     font-family:var(--sans);cursor:pointer;background:var(--accent);color:#fff}
   button.primary:hover{background:var(--accent-deep)}
@@ -53,10 +55,11 @@
   .bad{color:var(--bad);font-weight:600}
 
   .tablewrap{overflow:auto;max-height:420px;border:1px solid var(--line);border-radius:6px}
-  table{border-collapse:collapse;font-size:12.5px;width:100%}
+  table{border-collapse:collapse;font-size:12.5px}
   th{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);
      text-align:left;padding:6px 9px;border-bottom:2px solid var(--line);background:#f7fafb;position:sticky;top:0;white-space:nowrap}
-  td{padding:5px 9px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px;white-space:nowrap}
+  td{padding:5px 9px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px;
+     white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis}
   .empty{color:var(--ink-soft);text-align:center;padding:32px 10px;font-size:13px}
   .counts{font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
   .counts b{color:var(--ink)}
@@ -103,17 +106,19 @@
     <div class="head-row">
       <h2>3 · Result</h2>
       <span class="counts" id="resultCounts"></span>
-      <span class="spacer"></span>
-      <span id="dlWrap" style="display:none">
-        <select id="dlFormat" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;
-          font-family:var(--sans);font-size:12.5px;background:#fff">
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <button class="primary" id="runBtn" disabled>Run conversion</button>
+      <span id="dlWrap" style="display:inline-flex;align-items:center;gap:8px">
+        <select id="dlFormat" disabled style="border:1px solid var(--line);border-radius:6px;padding:9px 8px;
+          font-family:var(--sans);font-size:13px;background:#fff">
           <option value="csv">.csv</option>
           <option value="xlsx">.xlsx</option>
+          <option value="xls">.xls</option>
         </select>
-        <button class="btn" id="downloadBtn">⬇ Download</button>
+        <button class="btn" id="downloadBtn" disabled style="padding:9px 14px;font-size:13px">⬇ Download</button>
       </span>
     </div>
-    <button class="primary" id="runBtn" disabled>Run conversion</button>
     <ul class="notes" id="runNotes" style="margin-top:12px"></ul>
     <div class="tablewrap" id="previewWrap" style="display:none;margin-top:12px"></div>
     <div class="empty" id="previewEmpty">Drop a file and run the conversion — a preview of the output appears here.</div>
@@ -325,7 +330,7 @@ function resetResult(){
   state.output=null;
   $('runNotes').innerHTML=''; $('resultCounts').textContent='';
   $('previewWrap').style.display='none'; $('previewEmpty').style.display='';
-  $('dlWrap').style.display='none';
+  $('dlFormat').disabled = true; $('downloadBtn').disabled = true;
 }
 
 $('runBtn').onclick = function(){
@@ -336,7 +341,7 @@ $('runBtn').onclick = function(){
     $('runNotes').innerHTML = '<li class="ok">Done — preview below. Spot-check a few rows before uploading to fadmin.</li>';
     $('resultCounts').innerHTML = '<b>'+res.summary+'</b>';
     renderPreview(res.rows);
-    $('dlWrap').style.display='';
+    $('dlFormat').disabled = false; $('downloadBtn').disabled = false;
     toast('Conversion complete.');
   }catch(err){
     resetResult();
@@ -353,7 +358,7 @@ function renderPreview(rows){
   html += '</tr></thead><tbody>';
   rows.slice(0, maxRows).forEach(function(r){
     html += '<tr>';
-    for(var c=0;c<width;c++) html += '<td>'+esc(isEmpty(r[c])?'':r[c])+'</td>';
+    for(var c=0;c<width;c++){ var v = isEmpty(r[c])?'':String(r[c]); html += '<td title="'+esc(v)+'">'+esc(v)+'</td>'; }
     html += '</tr>';
   });
   html += '</tbody></table>';
@@ -366,11 +371,12 @@ function renderPreview(rows){
 $('downloadBtn').onclick = function(){
   if(!state.output) return;
   var fmt = $('dlFormat').value;
-  if(fmt === 'xlsx'){
+  if(fmt === 'xlsx' || fmt === 'xls'){
     var rows = state.output.map(function(r){ return r.map(function(c){ return isEmpty(c) ? null : c; }); });
     var ws = XLSX.utils.aoa_to_sheet(rows);
     var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Processed');
-    XLSX.writeFile(wb, state.outName.replace(/\.csv$/,'') + '.xlsx');
+    // SheetJS picks the writer from the extension: .xlsx → modern XML, .xls → legacy BIFF8
+    XLSX.writeFile(wb, state.outName.replace(/\.csv$/,'') + '.' + fmt);
     return;
   }
   var csv = state.output.map(function(r){
