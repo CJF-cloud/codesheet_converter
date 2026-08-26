@@ -53,6 +53,19 @@
   .notes b{color:var(--ink)}
   .ok{color:var(--ok);font-weight:600}
   .bad{color:var(--bad);font-weight:600}
+  .warn{color:var(--warn);font-weight:600}
+
+  .sublabel{font-weight:600;font-size:13px;color:var(--ink);margin-bottom:6px}
+  .sublabel span{color:var(--ink-soft);font-weight:400}
+  textarea#targetInstr{width:100%;min-height:150px;resize:vertical;border:1px solid var(--line);border-radius:6px;
+    padding:10px 11px;font-family:var(--mono);font-size:12.5px;line-height:1.55;color:var(--ink);background:#fff}
+  textarea#targetInstr:focus{outline:none;border-color:var(--accent)}
+  .chipline{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .tag{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:11px;border:1px solid var(--line);background:var(--paper)}
+  .tag.pull{border-color:#e3b9b9;background:#fdf2f2;color:#9c2b2b}
+  .tag.mkt{border-color:#e6cfa6;background:#fdf7ec;color:#8a5f14}
+  .tag.place{border-color:#a8d9df;background:#eefafb;color:#0a6b76}
+  .tag.miss{border-color:#d8dfe4;background:#f4f6f7;color:var(--ink-soft)}
 
   .tablewrap{overflow:auto;max-height:420px;border:1px solid var(--line);border-radius:6px}
   table{border-collapse:collapse;font-size:12.5px}
@@ -97,8 +110,15 @@
       <option value="">Choose a retailer…</option>
       <option value="vallarta">Vallarta</option>
       <option value="sprouts">Sprouts</option>
+      <option value="target">Target USA</option>
     </select>
     <div class="notes" id="detectNote" style="margin-top:8px"></div>
+
+    <div id="targetPanel" style="display:none;margin-top:16px;padding-top:14px;border-top:1px dashed var(--line)">
+      <div class="sublabel">Page adjustments <span>— paste the retailer’s notes exactly as you received them, one per line</span></div>
+      <textarea id="targetInstr" spellcheck="false" placeholder="* There is images/copy changes for page 20 will notify when this page is ready.&#10;* Pages 6 &amp; 7 will not have HI market&#10;* Letter page B (Baby) follows page 29.&#10;* Letter page E (BTC) follows page 13.&#10;* Letter page F (Stat) follows page H.&#10;* Letter page G (Stat) follows page F.&#10;* Letter page H (BTS/C) follows 11.&#10;* Letter page J (Sprt) follows page 2"></textarea>
+      <div class="notes" id="instrParse" style="margin-top:8px"></div>
+    </div>
   </section>
 
   <!-- ============ 3 · RUN ============ -->
@@ -266,11 +286,262 @@ function processSprouts(grid){
            summary:(grid.length-headerIdx-1)+' data rows · '+keep.length+' columns (metadata rows kept on top)' };
 }
 
+// ---- FORMAT 3: TARGET USA ----
+/* Reads the retailer's plain-text page adjustments and turns them into three
+   kinds of instruction: pulled pages, market exclusions, letter-page placements. */
+function parseTargetInstructions(text, marketCols){
+  var out = { pull:[], pullLetters:[], noMarket:[], follows:[], parsed:[], unparsed:[] };
+  var mkSet = {}, strict = !!(marketCols && marketCols.length);
+  (marketCols||[]).forEach(function(m){ if(m) mkSet[String(m).toUpperCase()] = true; });
+
+  String(text||'').split(/\r?\n/).forEach(function(raw){
+    var line = raw.replace(/^[\s*\u2022\u00b7\-\u2013]+/,'').trim();
+    if(!line) return;
+    var low = line.toLowerCase();
+
+    // 1) letter page placement — "Letter page B (Baby) follows page 29." / "follows page H." / "follows 11."
+    var m = low.match(/letter\s*page\s*([a-z]\d?)\b[\s\S]*?follow(?:s|ing)?\s*(?:after\s*)?(?:page\s*)?([0-9]+|[a-z]\d?)\b/);
+    if(m){
+      var L = m[1].toUpperCase(), A = m[2].toUpperCase();
+      out.follows.push({ letter:L, after:A });
+      out.parsed.push({ kind:'place', text:'Letter page '+L+' → after '+A });
+      return;
+    }
+
+    // 2) market exclusion — "Pages 6 & 7 will not have HI market"
+    var m2 = low.match(/pages?\s*((?:\d+\s*(?:&|and|,|\/|\+)?\s*)+?)\s*(?:will\s+not\s+have|won'?t\s+have|will\s+have\s+no|do(?:es)?\s+not\s+have|without|excludes?|excluded|no)\s+([a-z0-9]+)\s*(?:market)?/);
+    if(m2){
+      var mk = m2[2].toUpperCase();
+      if(!strict || mkSet[mk]){
+        var pgs = (m2[1].match(/\d+/g)||[]).map(Number);
+        if(pgs.length){
+          out.noMarket.push({ pages:pgs, market:mk });
+          out.parsed.push({ kind:'mkt', text:'No '+mk+' on pg '+pgs.join(', ') });
+          return;
+        }
+      }
+    }
+
+    // 3) pulled page — "…waiting on images for page 1, 19, 25, J, K, will notify"
+    if(/notif|page is ready|not\s+ready|on\s+hold|pending|tbd|to\s+come|hold\s+for|waiting\s+on/.test(low)){
+      // an item is a number or a lone letter; the list may mix them and is comma/&/and separated
+      var ITEM = '(?:\\d+|[a-z](?![a-z0-9]))';
+      var SEP  = '(?:\\s*(?:,|&|and|\\/|\\+|-|to|\\s)\\s*)';
+      var re = new RegExp('pages?\\s*(' + ITEM + '(?:' + SEP + ITEM + ')*)', 'g');
+      var nums = [], lets = [], m3;
+      while((m3 = re.exec(low)) !== null){
+        // blank out separator words first, or "4 and 5" tokenises as 4, A, N, D, 5
+        var cleaned = m3[1].replace(/\b(?:and|to)\b/g, ',');
+        (cleaned.match(/\d+|[a-z](?![a-z0-9])/g) || []).forEach(function(tok){
+          if(/^\d+$/.test(tok)){ if(nums.indexOf(+tok) === -1) nums.push(+tok); }
+          else { var U = tok.toUpperCase(); if(lets.indexOf(U) === -1) lets.push(U); }
+        });
+      }
+      if(nums.length || lets.length){
+        out.pull = out.pull.concat(nums);
+        out.pullLetters = out.pullLetters.concat(lets);
+        out.parsed.push({ kind:'pull', text:'Pull pg ' + nums.concat(lets).join(', ') });
+        return;
+      }
+    }
+
+    out.unparsed.push(line);
+  });
+  return out;
+}
+
+function processTarget(grid, instrText){
+  var notes = [], warns = [];
+
+  // locate the header row (has both "PDF" and "PG Number")
+  var headerIdx = -1;
+  for(var i=0;i<grid.length;i++){
+    var joined = grid[i].map(function(c){ return isEmpty(c)?'':String(c).trim(); }).join('|').toLowerCase();
+    if(joined.indexOf('pg number') !== -1 && joined.indexOf('pdf') !== -1){ headerIdx = i; break; }
+  }
+  if(headerIdx === -1) throw new Error('Couldn\u2019t find a header row containing "PDF" and "PG Number" — is this a Target USA codesheet?');
+  notes.push('Header row found at sheet row <b>'+(headerIdx+1)+'</b>.');
+
+  var width = Math.max.apply(null, grid.map(function(r){ return r.length; }));
+  var header = [];
+  for(var c=0;c<width;c++) header.push(isEmpty(grid[headerIdx][c]) ? '' : String(grid[headerIdx][c]).trim());
+
+  // metadata above the header: keep the per-market page-count row for validation
+  var checksum = null, flyerDate = null;
+  for(var i=0;i<headerIdx;i++){
+    var r = grid[i];
+    if(isEmpty(r[0])) continue;
+    var a0 = String(r[0]).trim();
+    if(/^\d{8}$/.test(a0) && !flyerDate) flyerDate = a0;
+    if(/^\d+$/.test(a0)){
+      var hasCounts = false;
+      for(var c=2;c<Math.min(width,14);c++) if(!isEmpty(r[c]) && /^\d+$/.test(String(r[c]).trim())) hasCounts = true;
+      if(hasCounts) checksum = r;
+    }
+  }
+
+  // data rows
+  var data = [];
+  for(var i=headerIdx+1;i<grid.length;i++){
+    var r = grid[i], row = [];
+    for(var c=0;c<width;c++) row.push(r[c]===undefined?null:r[c]);
+    if(row.some(function(v){ return !isEmpty(v); })) data.push(row);
+  }
+  if(!data.length) throw new Error('No data rows found below the header row.');
+
+  // drop trailing/empty market columns (A and B always kept)
+  var keep = [0,1];
+  for(var c=2;c<width;c++) if(data.some(function(r){ return !isEmpty(r[c]); })) keep.push(c);
+  var droppedCols = width - keep.length;
+  if(droppedCols) notes.push('Dropped <b>'+droppedCols+'</b> empty column(s) to the right of the market grid.');
+  var headerOut = keep.map(function(c){ return header[c]; });
+  data = data.map(function(r){ return keep.map(function(c){ return r[c]===undefined?null:r[c]; }); });
+  var marketCols = headerOut.slice(2);
+
+  var ins = parseTargetInstructions(instrText, marketCols);
+  if(!ins.parsed.length) warns.push('No page adjustments were recognised — the output is a straight clean-up with no pulls, market changes or letter pages placed.');
+  ins.unparsed.forEach(function(l){ warns.push('Couldn\u2019t interpret this line, so it was ignored: “'+esc(l)+'”'); });
+
+  // normalise PDF filename + page token
+  var addedPdf = 0;
+  data.forEach(function(r){
+    var nm = String(r[0]).trim();
+    if(!/\.pdf$/i.test(nm)){ nm += '.pdf'; addedPdf++; }
+    r[0] = nm;
+    var t = String(r[1]).trim().toUpperCase();
+    r[1] = /^\d+$/.test(t) ? parseInt(t,10) : t;
+  });
+  if(addedPdf) notes.push('Appended <b>.pdf</b> to <b>'+addedPdf+'</b> filename(s) that were missing it.');
+
+  // 1) pulled pages — drop every instance (numeric pages and letter pages alike)
+  var pulledGroups = 0;
+  if(ins.pull.length || ins.pullLetters.length){
+    var before = data.length;
+    var seenTok = {}, gonTok = {};
+    data.forEach(function(r){ seenTok[String(r[1])] = true; });
+    data = data.filter(function(r){
+      var drop = (typeof r[1] === 'number')
+        ? ins.pull.indexOf(r[1]) !== -1
+        : ins.pullLetters.indexOf(String(r[1])) !== -1;
+      if(drop) gonTok[String(r[1])] = true;
+      return !drop;
+    });
+    pulledGroups = Object.keys(gonTok).length;
+    var gone = before - data.length;
+    var allPulled = ins.pull.concat(ins.pullLetters);
+    if(gone) notes.push('Pulled page(s) <b>'+allPulled.join(', ')+'</b> — removed <b>'+gone+'</b> row(s) across '+pulledGroups+' page(s).');
+    else warns.push('Nothing matched pulled page(s) <b>'+allPulled.join(', ')+'</b> — check the page reference.');
+  }
+
+  // 2) market exclusions
+  ins.noMarket.forEach(function(rule){
+    var ci = headerOut.indexOf(rule.market);
+    if(ci === -1){ warns.push('“'+rule.market+'” isn\u2019t a column in this file — that exclusion was skipped.'); return; }
+    var cleared = 0;
+    data.forEach(function(r){
+      if(typeof r[1] === 'number' && rule.pages.indexOf(r[1]) !== -1 && !isEmpty(r[ci])){ r[ci] = null; cleared++; }
+    });
+    var beforeN = data.length;
+    data = data.filter(function(r){
+      if(typeof r[1] === 'number' && rule.pages.indexOf(r[1]) !== -1){
+        for(var c=2;c<headerOut.length;c++) if(!isEmpty(r[c])) return true;
+        return false;
+      }
+      return true;
+    });
+    var emptied = beforeN - data.length;
+    if(cleared || emptied) notes.push('Removed <b>'+rule.market+'</b> from page(s) <b>'+rule.pages.join(', ')+'</b> — '+cleared+' mark(s) cleared'+(emptied?', '+emptied+' now-empty row(s) dropped':'')+'.');
+    else notes.push('<b>'+rule.market+'</b> was already absent from page(s) <b>'+rule.pages.join(', ')+'</b> — nothing to change.');
+  });
+
+  // 3) group by page, numeric pages in order, then slot in the letter pages
+  var groups = {}, seen = [];
+  data.forEach(function(r){
+    var k = String(r[1]);
+    if(!groups[k]){ groups[k] = { token:r[1], rows:[] }; seen.push(k); }
+    groups[k].rows.push(r);
+  });
+  var seq = seen.filter(function(k){ return typeof groups[k].token === 'number'; })
+                .sort(function(a,b){ return groups[a].token - groups[b].token; });
+  var letterKeys = seen.filter(function(k){ return typeof groups[k].token !== 'number'; });
+
+  var queue = [];
+  ins.follows.forEach(function(f){
+    if(groups[f.letter]) queue.push(f);
+    else if(ins.pullLetters.indexOf(f.letter) !== -1)
+      notes.push('Letter page <b>'+f.letter+'</b> was pulled, so its placement instruction was skipped.');
+    else warns.push('Instruction mentions letter page <b>'+f.letter+'</b>, but there\u2019s no such page in the file.');
+  });
+  var placed = {}, guard = 0;
+  while(queue.length && guard++ < 80){
+    var still = [];
+    queue.forEach(function(f){
+      var at = seq.indexOf(String(f.after));
+      if(at !== -1){ seq.splice(at+1, 0, f.letter); placed[f.letter] = true; }
+      else still.push(f);
+    });
+    if(still.length === queue.length) break;   // nothing resolved this pass
+    queue = still;
+  }
+  queue.forEach(function(f){
+    warns.push('Couldn\u2019t place letter page <b>'+f.letter+'</b> after “'+f.after+'” — that page isn\u2019t in the file. Left at the end.');
+    seq.push(f.letter); placed[f.letter] = true;
+  });
+  letterKeys.forEach(function(k){
+    if(!placed[k]){ warns.push('Letter page <b>'+k+'</b> is in the file but has no placement instruction — left at the end.'); seq.push(k); }
+  });
+  var nPlaced = Object.keys(placed).length;
+  if(nPlaced) notes.push('Slotted <b>'+nPlaced+'</b> letter page(s) into the running order.');
+
+  // 4) renumber pages sequentially, preserving in-file row order inside each page
+  var rowsOut = [headerOut], pageNo = 0;
+  seq.forEach(function(k){
+    pageNo++;
+    groups[k].rows.forEach(function(r){ var copy = r.slice(); copy[1] = pageNo; rowsOut.push(copy); });
+  });
+  notes.push('Renumbered to <b>'+pageNo+'</b> sequential pages across <b>'+(rowsOut.length-1)+'</b> rows.');
+
+  // 5) validate against the sheet's own per-market page totals
+  if(checksum){
+    var bad = [], shortfalls = [], checked = 0;
+    marketCols.forEach(function(mk, idx){
+      var col = idx + 2, expected = checksum[keep[col]];
+      if(isEmpty(expected) || !/^\d+$/.test(String(expected).trim())) return;
+      checked++;
+      var got = 0;
+      seq.forEach(function(k){ if(groups[k].rows.some(function(r){ return !isEmpty(r[col]); })) got++; });
+      if(parseInt(expected,10) !== got){ bad.push(mk+' (sheet '+expected+' vs output '+got+')'); shortfalls.push(parseInt(expected,10)-got); }
+    });
+    var uniform = shortfalls.length && shortfalls.every(function(s){ return s === shortfalls[0]; });
+    if(!bad.length){
+      notes.push('Page-count check <b class="ok">passed</b> for all '+checked+' markets against the sheet\u2019s totals row.');
+    } else if(uniform && pulledGroups && shortfalls[0] === pulledGroups){
+      notes.push('Page-count check: every market is short by exactly <b>'+pulledGroups+'</b> — the '+pulledGroups+' pulled page(s). The sheet\u2019s totals row was written before the pull, so this is expected.');
+    } else if(uniform && bad.length === checked){
+      var s = shortfalls[0];
+      warns.push('Page-count check: <b>all '+checked+' markets</b> are '+(s>0?'short by':'over by')+' <b>'+Math.abs(s)+'</b> page(s) versus the sheet\u2019s totals row'+
+                 (pulledGroups ? ' ('+pulledGroups+' page(s) were pulled)' : '')+'. Usually that means a letter page is missing a placement instruction, or a pull was missed.');
+    } else {
+      warns.push('Page-count check <b>failed</b> for '+bad.length+' of '+checked+' market(s): '+bad.slice(0,8).join(', ')+
+                 (bad.length>8 ? ' … and '+(bad.length-8)+' more' : '')+'. Re-read the adjustments before uploading.');
+    }
+  } else {
+    warns.push('No per-market totals row found above the header, so the page counts couldn\u2019t be cross-checked.');
+  }
+
+  return {
+    rows: rowsOut, notes: notes, warns: warns, headerRow: true,
+    outName: 'target_' + (flyerDate || 'codesheet') + '_processed.csv',
+    summary: pageNo + ' pages · ' + (rowsOut.length-1) + ' rows · ' + marketCols.length + ' markets'
+  };
+}
+
 /* ==================================================================
  * File handling
  * ================================================================== */
 function detectFormat(grid){
   var joined = grid.slice(0,40).map(function(r){ return r.map(function(c){ return isEmpty(c)?'':String(c); }).join('|'); }).join('\n');
+  if(/PG Number/i.test(joined) && /PDF/i.test(joined)) return 'target';
   if(joined.indexOf('Version Code') !== -1) return 'sprouts';
   if(joined.indexOf('Versions') !== -1) return 'vallarta';
   return null;
@@ -312,15 +583,49 @@ dz.addEventListener('drop', function(e){ if(e.dataTransfer.files[0]) handleFile(
 /* ==================================================================
  * Format selection
  * ================================================================== */
+var RETAILER_LABEL = { vallarta:'Vallarta', sprouts:'Sprouts', target:'Target USA' };
+
 function selectFormat(fmt, auto){
   state.format = fmt || null;
   $('retailerSelect').value = fmt || '';
   $('detectNote').innerHTML = fmt
-    ? (auto ? 'Auto-detected as <b>'+(fmt==='vallarta'?'Vallarta':'Sprouts')+'</b> — change the dropdown if that\u2019s wrong.' : '')
+    ? (auto ? 'Auto-detected as <b>'+(RETAILER_LABEL[fmt]||fmt)+'</b> — change the dropdown if that\u2019s wrong.' : '')
     : '';
+  $('targetPanel').style.display = (fmt === 'target') ? '' : 'none';
+  if(fmt === 'target') renderInstrParse();
   resetResult(); updateRun();
 }
 $('retailerSelect').addEventListener('change', function(){ selectFormat(this.value, false); });
+
+/* live read-back of the pasted adjustments, so a mis-typed line is obvious before running */
+function renderInstrParse(){
+  var txt = $('targetInstr').value;
+  if(!txt.trim()){ $('instrParse').innerHTML = 'Optional — leave blank to just clean up the sheet with no adjustments.'; return; }
+  var marketCols = null;
+  if(state.grid){
+    for(var i=0;i<state.grid.length;i++){
+      var j = state.grid[i].map(function(c){ return isEmpty(c)?'':String(c).trim(); }).join('|').toLowerCase();
+      if(j.indexOf('pg number') !== -1 && j.indexOf('pdf') !== -1){
+        marketCols = state.grid[i].slice(2).map(function(c){ return isEmpty(c)?'':String(c).trim(); }).filter(Boolean);
+        break;
+      }
+    }
+  }
+  var ins = parseTargetInstructions(txt, marketCols);
+  var html = '';
+  if(ins.parsed.length){
+    html += '<div>Understood <b>'+ins.parsed.length+'</b> instruction(s):</div><div class="chipline">';
+    ins.parsed.forEach(function(p){ html += '<span class="tag '+p.kind+'">'+esc(p.text)+'</span>'; });
+    html += '</div>';
+  }
+  if(ins.unparsed.length){
+    html += '<div style="margin-top:8px"><span class="warn">Not understood</span> — these lines will be ignored:</div><div class="chipline">';
+    ins.unparsed.forEach(function(l){ html += '<span class="tag miss">'+esc(l.length>70?l.slice(0,70)+'…':l)+'</span>'; });
+    html += '</div>';
+  }
+  $('instrParse').innerHTML = html;
+}
+$('targetInstr').addEventListener('input', function(){ renderInstrParse(); resetResult(); });
 
 /* ==================================================================
  * Run + output
@@ -336,11 +641,18 @@ function resetResult(){
 $('runBtn').onclick = function(){
   if(!state.grid || !state.format) return;
   try{
-    var res = state.format==='vallarta' ? processVallarta(state.grid) : processSprouts(state.grid);
+    var res;
+    if(state.format === 'vallarta')    res = processVallarta(state.grid);
+    else if(state.format === 'sprouts') res = processSprouts(state.grid);
+    else                                res = processTarget(state.grid, $('targetInstr').value);
     state.output = res.rows; state.outName = res.outName;
-    $('runNotes').innerHTML = '<li class="ok">Done — preview below. Spot-check a few rows before uploading to fadmin.</li>';
+
+    var html = '<li class="ok">Done — preview below. Spot-check a few rows before uploading to fadmin.</li>';
+    (res.notes || []).forEach(function(n){ html += '<li>'+n+'</li>'; });
+    (res.warns || []).forEach(function(w){ html += '<li><span class="warn">Check:</span> '+w+'</li>'; });
+    $('runNotes').innerHTML = html;
     $('resultCounts').innerHTML = '<b>'+res.summary+'</b>';
-    renderPreview(res.rows);
+    renderPreview(res.rows, res.headerRow);
     $('dlFormat').disabled = false; $('downloadBtn').disabled = false;
     toast('Conversion complete.');
   }catch(err){
@@ -350,13 +662,19 @@ $('runBtn').onclick = function(){
   }
 };
 
-function renderPreview(rows){
-  var maxRows = 60, maxCols = 30;
+function renderPreview(rows, headerRow){
+  var maxRows = 60, maxCols = 40;
   var html = '<table><thead><tr>';
   var width = Math.min(maxCols, Math.max.apply(null, rows.map(function(r){ return r.length; })));
-  for(var c=0;c<width;c++) html += '<th>'+esc(String.fromCharCode(65+(c%26)))+(c>=26?Math.floor(c/26):'')+'</th>';
+  var body = rows;
+  if(headerRow && rows.length > 1){
+    body = rows.slice(1);
+    for(var c=0;c<width;c++) html += '<th>'+esc(isEmpty(rows[0][c])?'':rows[0][c])+'</th>';
+  } else {
+    for(var c=0;c<width;c++) html += '<th>'+esc(String.fromCharCode(65+(c%26)))+(c>=26?Math.floor(c/26):'')+'</th>';
+  }
   html += '</tr></thead><tbody>';
-  rows.slice(0, maxRows).forEach(function(r){
+  body.slice(0, maxRows).forEach(function(r){
     html += '<tr>';
     for(var c=0;c<width;c++){ var v = isEmpty(r[c])?'':String(r[c]); html += '<td title="'+esc(v)+'">'+esc(v)+'</td>'; }
     html += '</tr>';
@@ -365,7 +683,7 @@ function renderPreview(rows){
   $('previewWrap').innerHTML = html;
   $('previewWrap').style.display='';
   $('previewEmpty').style.display='none';
-  if(rows.length > maxRows) $('resultCounts').innerHTML += ' <span style="color:var(--ink-soft)">(previewing first '+maxRows+' rows)</span>';
+  if(body.length > maxRows) $('resultCounts').innerHTML += ' <span style="color:var(--ink-soft)">(previewing first '+maxRows+' rows)</span>';
 }
 
 $('downloadBtn').onclick = function(){
