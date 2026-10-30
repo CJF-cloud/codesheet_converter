@@ -146,6 +146,12 @@
   .fadmin .f-title{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px}
   .fadmin ol{margin:8px 0 12px 20px;font-size:13px;color:var(--ink-soft);display:grid;gap:2px}
   .fadmin ol b{color:var(--ink);font-weight:500}
+  .setup{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:13px;
+    background:var(--card);border:.5px solid var(--line-strong);border-radius:12px;padding:10px 12px 10px 14px;margin:10px 0 4px}
+  .setup b{font-weight:600}
+  .bm{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:7px 14px;font-size:13px;font-weight:500;
+    background:var(--accent);color:#fff;cursor:grab;user-select:none;white-space:nowrap;box-shadow:0 2px 6px rgba(0,113,227,.25)}
+  .bm:active{cursor:grabbing}
   .kbd{font-family:var(--sans);font-size:11.5px;font-weight:500;padding:1px 6px;border-radius:5px;background:var(--card);
     border:.5px solid var(--line-strong);color:var(--ink)}
   .actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
@@ -250,9 +256,15 @@
 
       <div class="fadmin" id="psFadminBox">
         <div class="f-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 10l-5 3.6L16.5 20 12 16.4 7.5 20 9 13.6 4 10l6.1-1.2z"/></svg>Auto-fill from fadmin</div>
+        <div class="setup" id="psSetup">
+          <div><b>One-time setup:</b> drag this button to your bookmarks bar
+            <span class="notes">(show the bar with <span class="kbd">⌘⇧B</span>)</span></div>
+          <a class="bm" id="psBookmarklet" href="#" draggable="true" title="Drag me to your bookmarks bar">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg>Copy fadmin pages</a>
+        </div>
         <ol>
           <li><b>Open the flyer’s FTP files</b> in fadmin (button below).</li>
-          <li>Select all and copy: <span class="kbd">⌘A</span> then <span class="kbd">⌘C</span>.</li>
+          <li>Click the <b>Copy fadmin pages</b> bookmark — it reads every page of results, not just the first 50, and copies them.</li>
           <li>Come back and <b>paste</b> — the page counts fill themselves in.</li>
         </ol>
         <div class="actions">
@@ -846,7 +858,9 @@ function renderPsPanel(){
   catch(err){ $('psFadminBox').style.display='none'; $('psZoneTable').innerHTML=''; $('psInfo').innerHTML = '<span class="bad">'+esc(err.message)+'</span>'; return; }
   $('psFadminBox').style.display = '';
   $('psFadminLinks').innerHTML = psFlyerCodes().map(function(code){
-    return '<a class="btn" href="'+esc(psFadminUrl(code,1))+'" target="_blank" rel="noopener">'+
+    var bases = state.ps.zones.map(function(z){ return z.base; })
+      .filter(function(b){ return b.toLowerCase().indexOf(code.toLowerCase()) === 0; });
+    return '<a class="btn" href="'+esc(psFadminUrl(code,1)+'#cxe='+encodeURIComponent(bases.join(',')))+'" target="_blank" rel="noopener">'+
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>'+
       'Open '+esc(code)+' in fadmin</a>';
   }).join('');
@@ -930,11 +944,91 @@ function psParseFadmin(text){
     var b = m[1].toLowerCase(), n = parseInt(m[2], 10);
     (found[b] = found[b] || {})[n] = true;
   }
-  // "Displaying files 1 - 50 of 98 in total" → more pages to copy
+  // "Displaying files 1 - 50 of 98 in total" → a manual ⌘A copy only got the first page
   var shownTo = 0, total = 0, re2 = /Displaying files\s+\d+\s*-\s*(\d+)\s+of\s+(\d+)/gi;
   while((m = re2.exec(text)) !== null){ shownTo = Math.max(shownTo, +m[1]); total = Math.max(total, +m[2]); }
-  return { found:found, shownTo:shownTo, total:total };
+  var all = /CXE-FADMIN-ALL/.test(text);   // written by the bookmark: every results page was read
+  return { found:found, shownTo:shownTo, total:total, all:all };
 }
+
+/* ---- "Copy fadmin pages" bookmark ----
+   Runs on the fadmin FTP files page, where you're already signed in. It walks every
+   page of the current search (same-origin, read-only GETs), collects each
+   …_pNNNN.pdf name and copies the list. Safari/Chrome may refuse a clipboard write
+   that isn't tied to a click, so it falls back to a "Copy" button in a small panel. */
+function psBookmarkletSource(){
+  (async function(){
+    var ID = 'cxe-fadmin-copy';
+    function panel(msg, text){
+      var old = document.getElementById(ID); if(old) old.remove();
+      var d = document.createElement('div'); d.id = ID;
+      d.style.cssText = 'position:fixed;top:20px;right:20px;z-index:2147483647;background:rgba(29,29,31,.94);color:#fff;'+
+        'font:14px/1.45 -apple-system,BlinkMacSystemFont,Helvetica,sans-serif;padding:16px 18px;border-radius:14px;'+
+        'box-shadow:0 12px 32px rgba(0,0,0,.3);max-width:340px';
+      var h = document.createElement('div'); h.textContent = 'Codesheet Converter'; h.style.cssText = 'font-weight:600;margin-bottom:4px';
+      var p = document.createElement('div'); p.textContent = msg;
+      var x = document.createElement('button'); x.textContent = '×';
+      x.style.cssText = 'position:absolute;top:8px;right:10px;border:0;background:none;color:#aaa;font-size:18px;cursor:pointer';
+      x.onclick = function(){ d.remove(); };
+      d.appendChild(x); d.appendChild(h); d.appendChild(p);
+      if(text){
+        var b = document.createElement('button'); b.textContent = 'Copy to clipboard';
+        b.style.cssText = 'margin-top:12px;border:0;border-radius:999px;background:#0a84ff;color:#fff;font:500 13px -apple-system,sans-serif;padding:8px 16px;cursor:pointer';
+        b.onclick = function(){
+          navigator.clipboard.writeText(text).then(function(){ p.textContent = 'Copied — paste it into the converter.'; b.remove(); setTimeout(function(){ d.remove(); }, 3000); },
+            function(){ p.textContent = 'Clipboard blocked by the browser. Select the text below and copy it.'; var t = document.createElement('textarea');
+              t.value = text; t.style.cssText = 'width:100%;height:90px;margin-top:8px;font:11px monospace'; d.appendChild(t); t.select(); b.remove(); });
+        };
+        d.appendChild(b);
+      }
+      document.body.appendChild(d); return p;
+    }
+    if(!/\/merchants\/\d+\/ftp_files/.test(location.pathname)){ panel('Open a fadmin FTP files page first, then click this bookmark again.'); return; }
+    var status = panel('Reading fadmin\u2026');
+    var names = [], seen = {}, MAX = 40, reqs = 0;
+    var RE = /_p\d{3,5}\.pdf$/i;
+    function baseOf(n){ return n.replace(/_p\d{3,5}\.pdf$/i, '').toLowerCase(); }
+    async function scan(search){
+      var url = new URL(location.href); url.searchParams.delete('page');
+      if(search !== null) url.searchParams.set('search_text', search);
+      var last = 1;
+      for(var page = 1; page <= last && page <= MAX; page++){
+        url.searchParams.set('page', page); reqs++;
+        status.textContent = 'Reading fadmin' + (search ? ' \u2014 ' + search : '') + ' (page ' + page + (last > 1 ? ' of ' + last : '') + ')\u2026';
+        var doc = new DOMParser().parseFromString(await (await fetch(url.toString(), { credentials:'same-origin' })).text(), 'text/html');
+        doc.querySelectorAll('td').forEach(function(td){
+          var t = td.textContent.trim();
+          if(RE.test(t) && !seen[t.toLowerCase()]){ seen[t.toLowerCase()] = true; names.push(t); }
+        });
+        if(page === 1) doc.querySelectorAll('.pagination a[href]').forEach(function(a){
+          var n = +new URL(a.getAttribute('href'), location.href).searchParams.get('page'); if(n > last) last = n;
+        });
+      }
+      return last;
+    }
+    /* Pass 1: the search on screen, every results page. */
+    var pages = await scan(null);
+    /* Pass 2: fadmin pages results with no tie-breaker on upload time, so files can slip
+       between pages. Re-search each PDF on its own (one short page each) to catch them.
+       The converter's fadmin link also passes the zone PDFs in the #cxe= hash. */
+    var bases = {}, list = [];
+    names.forEach(function(n){ bases[baseOf(n)] = true; });
+    var hash = (location.hash.match(/cxe=([^&]+)/) || [])[1];
+    if(hash) decodeURIComponent(hash).split(',').forEach(function(b){ if(b) bases[b.toLowerCase()] = true; });
+    list = Object.keys(bases).slice(0, 30);
+    for(var i = 0; i < list.length; i++) await scan(list[i]);
+    var text = names.join('\n') + '\nCXE-FADMIN-ALL ' + pages + ' page(s)';
+    var msg = 'Found ' + names.length + ' page file(s) for ' + list.length + ' PDF(s).' +
+              (pages > MAX ? ' Stopped at ' + MAX + ' pages \u2014 search by flyer code to narrow it.' : '');
+    try{ await navigator.clipboard.writeText(text); panel(msg + ' Copied \u2014 paste it into the converter.'); }
+    catch(e){ panel(msg, text); }
+  })();
+}
+$('psBookmarklet').href = 'javascript:' + encodeURIComponent('(' + psBookmarkletSource.toString() + ')()');
+$('psBookmarklet').addEventListener('click', function(e){
+  e.preventDefault();
+  toast('Drag this button to your bookmarks bar, then click it on the fadmin page.');
+});
 
 function psApplyFadmin(){
   var box = $('psFadminStatus'), txt = $('psPaste').value;
@@ -973,10 +1067,10 @@ function psApplyFadmin(){
   msgs.push('<div class="status s-ok"><span class="ok">✓</span><div>Filled from fadmin — '+
     state.ps.zones.filter(function(z){ return counts[z.zone]; })
       .map(function(z){ return '<b>'+esc(z.zone)+'</b> '+counts[z.zone]; }).join(' · ')+'</div></div>');
-  if(r.total && r.shownTo < r.total){
+  if(!r.all && r.total && r.shownTo < r.total){
     var next = Math.floor(r.shownTo / PS_PER_PAGE) + 1;
-    msgs.push('<div class="status s-warn"><span class="warn">!</span><div>fadmin showed files 1–'+r.shownTo+' of '+r.total+
-      ', so some pages may be missing. <a href="'+esc(psFadminUrl(codes[0], next))+'" target="_blank" rel="noopener">Open page '+next+' ↗</a> '+
+    msgs.push('<div class="status s-warn"><span class="warn">!</span><div>This copy only has files 1–'+r.shownTo+' of '+r.total+
+      ', so some pages may be missing. Use the <b>Copy fadmin pages</b> bookmark instead, or <a href="'+esc(psFadminUrl(codes[0], next))+'" target="_blank" rel="noopener">open page '+next+' ↗</a> '+
       'and paste it under the first one.</div></div>');
   }
   if(missing.length) msgs.push('<div class="status s-warn"><span class="warn">!</span><div>No pages found for <b>'+missing.map(esc).join(', ')+
