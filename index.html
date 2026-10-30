@@ -3,100 +3,224 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>CXE Codesheet Converter</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
-    --paper:#eef2f4; --card:#ffffff; --ink:#17242e; --ink-soft:#5b6b76;
-    --line:#d8dfe4; --accent:#0097a8; --accent-deep:#00727f;
-    --ok:#2e8b57; --warn:#e8a13d; --bad:#d64545;
-    --mono:'Source Code Pro',monospace; --sans:'Source Sans 3','Source Sans Pro',sans-serif;
+    --bg:#f5f5f7; --card:#ffffff; --field:#ffffff; --ink:#1d1d1f; --ink-soft:#6e6e73; --ink-faint:#86868b;
+    --line:rgba(0,0,0,.08); --line-strong:rgba(0,0,0,.16);
+    --fill:rgba(118,118,128,.12); --fill-soft:rgba(118,118,128,.06); --seg-on:#ffffff;
+    --accent:#0071e3; --accent-hover:#0077ed; --accent-soft:rgba(0,113,227,.10);
+    --ok:#248a3d; --ok-bg:rgba(36,138,61,.10); --warn:#b25000; --warn-bg:#fff6eb; --bad:#d70015; --bad-bg:#fff0f1;
+    --shadow:0 1px 1px rgba(0,0,0,.02), 0 8px 28px rgba(0,0,0,.06);
+    --bar:rgba(245,245,247,.72);
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#000000; --card:#1c1c1e; --field:#2c2c2e; --ink:#f5f5f7; --ink-soft:#a1a1a6; --ink-faint:#8e8e93;
+      --line:rgba(255,255,255,.10); --line-strong:rgba(255,255,255,.20);
+      --fill:rgba(118,118,128,.24); --fill-soft:rgba(118,118,128,.12); --seg-on:#636366;
+      --accent:#0a84ff; --accent-hover:#409cff; --accent-soft:rgba(10,132,255,.18);
+      --ok:#30d158; --ok-bg:rgba(48,209,88,.14); --warn:#ff9f0a; --warn-bg:rgba(255,159,10,.12); --bad:#ff453a; --bad-bg:rgba(255,69,58,.14);
+      --shadow:none; --bar:rgba(22,22,23,.72);
+    }
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:var(--sans);background:var(--paper);color:var(--ink);font-size:14.5px;line-height:1.5}
+  html{-webkit-text-size-adjust:100%}
+  body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:15px;line-height:1.47;
+       -webkit-font-smoothing:antialiased;letter-spacing:-.01em}
+  a{color:var(--accent);text-decoration:none}
+  code{font-family:var(--mono);font-size:.92em}
 
-  header{background:var(--ink);color:#fff;padding:14px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-  .brand{font-weight:700;font-size:16px}
-  .brand .stamp{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--paper);
-    background:var(--accent);padding:2px 7px;border-radius:3px;margin-left:8px;letter-spacing:.12em;vertical-align:2px}
+  /* ---------- top bar ---------- */
+  header{position:sticky;top:0;z-index:40;height:52px;display:flex;align-items:center;gap:12px;padding:0 22px;
+    background:var(--bar);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);
+    border-bottom:.5px solid var(--line)}
+  .appicon{width:28px;height:28px;border-radius:7px;flex:none;display:grid;place-items:center;
+    background:linear-gradient(160deg,#3aa0ff,#0060d6);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.25)}
+  .brand{font-weight:600;font-size:15px;letter-spacing:-.015em;white-space:nowrap}
+  .pill{white-space:nowrap}
+  .pill{font-size:11px;font-weight:600;color:var(--ink-soft);background:var(--fill);padding:2px 8px;border-radius:999px;letter-spacing:0}
   .spacer{flex:1}
-  .privacy{font-family:var(--mono);font-size:11.5px;color:#c6d2da}
+  .privacy{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft)}
 
-  main{max-width:1040px;margin:22px auto;padding:0 18px;display:grid;gap:16px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:18px}
-  .card h2{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:12px}
-  .head-row{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:12px}
-  .head-row h2{margin-bottom:0}
+  /* ---------- layout ---------- */
+  main{max-width:980px;margin:0 auto;padding:44px 22px 80px;display:grid;gap:20px}
+  main > *{min-width:0}
+  .hero{padding:0 4px 8px}
+  .hero h1{font-size:40px;line-height:1.1;font-weight:700;letter-spacing:-.025em}
+  .hero p{font-size:19px;color:var(--ink-soft);margin-top:8px;letter-spacing:-.015em;max-width:640px}
+  .card{background:var(--card);border-radius:18px;padding:28px;box-shadow:var(--shadow)}
+  @media (prefers-color-scheme: dark){ .card{border:.5px solid var(--line)} }
+  .card-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+  .step{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;
+    font-size:13px;font-weight:600;color:var(--accent);background:var(--accent-soft);letter-spacing:0}
+  .card-head h2{font-size:21px;font-weight:600;letter-spacing:-.02em}
+  .card-head .hint{font-size:13px;color:var(--ink-faint)}
 
-  .drop{border:1.5px dashed var(--line);border-radius:8px;padding:26px 14px;text-align:center;
-        color:var(--ink-soft);cursor:pointer;transition:border-color .2s, background .2s;font-size:13px}
-  .drop.over{border-color:var(--accent);background:#f0fafb}
-  .drop b{color:var(--ink)}
-  .filechip{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;
-    background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:3px 11px;margin-top:10px}
+  /* ---------- drop zone ---------- */
+  .drop{border:1.5px dashed var(--line-strong);border-radius:14px;padding:38px 16px;text-align:center;cursor:pointer;
+    background:var(--fill-soft);transition:border-color .2s,background .2s,transform .2s}
+  .drop:hover{border-color:var(--accent)}
+  .drop.over{border-color:var(--accent);background:var(--accent-soft);transform:scale(1.005)}
+  .drop .dz-title{font-size:17px;font-weight:600;margin-top:10px}
+  .drop .dz-sub{font-size:13px;color:var(--ink-soft);margin-top:2px}
+  .filechip{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:500;margin-top:14px;
+    background:var(--card);border:.5px solid var(--line-strong);border-radius:999px;padding:5px 13px 5px 9px}
+  .filechip .meta{color:var(--ink-faint);font-weight:400}
 
+  /* ---------- controls ---------- */
+  .seg{display:inline-flex;background:var(--fill);border-radius:10px;padding:2px;gap:2px;flex-wrap:wrap}
+  .seg button, .seg label{border:none;background:transparent;font-family:var(--sans);font-size:13px;font-weight:500;color:var(--ink);
+    padding:6px 16px;border-radius:8px;cursor:pointer;letter-spacing:-.01em;transition:background .15s, box-shadow .15s}
+  .seg label input{position:absolute;opacity:0;pointer-events:none}
+  .seg button.active, .seg label:has(input:checked){background:var(--seg-on);box-shadow:0 3px 8px rgba(0,0,0,.08),0 .5px 1.5px rgba(0,0,0,.12)}
+  .seg button:focus-visible, .seg label:focus-within{outline:2px solid var(--accent);outline-offset:1px}
 
-  .btn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:5px 10px;
-    font-family:var(--sans);font-weight:600;font-size:12.5px;color:var(--ink);cursor:pointer}
-  .btn:hover{border-color:var(--accent);color:var(--accent-deep)}
-  .btn:disabled, select:disabled{opacity:.45;cursor:not-allowed}
-  .btn:disabled:hover{border-color:var(--line);color:var(--ink)}
-  button.primary{border:none;border-radius:6px;padding:11px 22px;font-weight:700;font-size:14px;
-    font-family:var(--sans);cursor:pointer;background:var(--accent);color:#fff}
-  button.primary:hover{background:var(--accent-deep)}
-  button.primary:disabled{opacity:.45;cursor:not-allowed}
+  .btn{display:inline-flex;align-items:center;gap:6px;border:none;background:var(--fill);border-radius:999px;padding:8px 16px;
+    font-family:var(--sans);font-weight:500;font-size:13.5px;color:var(--accent);cursor:pointer;letter-spacing:-.01em;
+    transition:background .15s, opacity .15s;white-space:nowrap}
+  .btn:hover{background:var(--accent-soft)}
+  .btn:disabled{opacity:.4;cursor:not-allowed;background:var(--fill)}
+  button.primary{border:none;border-radius:999px;padding:11px 24px;font-weight:500;font-size:15px;font-family:var(--sans);
+    cursor:pointer;background:var(--accent);color:#fff;letter-spacing:-.01em;transition:background .15s, opacity .15s}
+  button.primary:hover{background:var(--accent-hover)}
+  button.primary:disabled{opacity:.35;cursor:not-allowed;background:var(--accent)}
+  select{border:.5px solid var(--line-strong);border-radius:8px;padding:8px 10px;font-family:var(--sans);font-size:13.5px;
+    color:var(--ink);background:var(--field)}
+  select:disabled{opacity:.4;cursor:not-allowed}
+  .selectwrap{position:relative;display:inline-block;min-width:260px}
+  .selectwrap::after{content:"";position:absolute;right:14px;top:50%;width:7px;height:7px;margin-top:-6px;pointer-events:none;
+    border-right:2px solid var(--ink-soft);border-bottom:2px solid var(--ink-soft);transform:rotate(45deg)}
+  #retailerSelect{appearance:none;-webkit-appearance:none;width:100%;font-size:15px;font-weight:500;padding:10px 40px 10px 14px;
+    border-radius:10px;cursor:pointer;transition:border-color .15s, box-shadow .15s}
+  #retailerSelect:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
 
-  .notes{font-size:13px;color:var(--ink-soft)}
-  .notes li{margin:3px 0 3px 18px}
-  .notes b{color:var(--ink)}
+  textarea, input.pgcount{font-family:var(--mono);color:var(--ink);background:var(--field);
+    border:.5px solid var(--line-strong);border-radius:10px;transition:border-color .15s, box-shadow .15s}
+  textarea:focus, input.pgcount:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+  textarea{width:100%;resize:vertical;padding:11px 13px;font-size:12.5px;line-height:1.55}
+  textarea#targetInstr{min-height:150px}
+  textarea#psPaste{min-height:62px;height:62px}
+  input.pgcount{width:76px;padding:7px 10px;font-size:14px;text-align:center}
+  input.pgcount:disabled{background:var(--fill-soft);color:var(--ink-soft)}
+  input.pgcount.invalid{border-color:var(--bad);box-shadow:0 0 0 4px var(--bad-bg)}
+
+  /* ---------- text ---------- */
+  .notes{font-size:13.5px;color:var(--ink-soft)}
+  .notes b{color:var(--ink);font-weight:600}
   .ok{color:var(--ok);font-weight:600}
   .bad{color:var(--bad);font-weight:600}
   .warn{color:var(--warn);font-weight:600}
+  .sublabel{font-weight:600;font-size:15px;color:var(--ink);margin-bottom:4px;letter-spacing:-.015em}
+  .sublabel span{color:var(--ink-soft);font-weight:400;font-size:13.5px}
+  .subpanel{margin-top:24px;padding-top:22px;border-top:.5px solid var(--line)}
+  #detectNote{margin-top:10px}
+  #detectNote:empty{display:none}
 
-  .sublabel{font-weight:600;font-size:13px;color:var(--ink);margin-bottom:6px}
-  .sublabel span{color:var(--ink-soft);font-weight:400}
-  textarea#targetInstr{width:100%;min-height:150px;resize:vertical;border:1px solid var(--line);border-radius:6px;
-    padding:10px 11px;font-family:var(--mono);font-size:12.5px;line-height:1.55;color:var(--ink);background:#fff}
-  textarea#targetInstr:focus{outline:none;border-color:var(--accent)}
+  ul.notes{list-style:none;display:grid;gap:6px}
+  ul.notes li{position:relative;padding:2px 0 2px 26px;overflow-wrap:anywhere}
+  ul.notes li::before{content:"";position:absolute;left:7px;top:10px;width:5px;height:5px;border-radius:50%;background:var(--ink-faint)}
+  ul.notes li.n-ok{color:var(--ink);font-weight:500}
+  ul.notes li.n-ok::before, ul.notes li.n-warn::before, ul.notes li.n-bad::before{left:0;top:4px;width:17px;height:17px;
+    font-size:11px;font-weight:700;color:#fff;display:grid;place-items:center;line-height:1}
+  ul.notes li.n-ok::before{content:"\2713";background:var(--ok)}
+  ul.notes li.n-warn{background:var(--warn-bg);border-radius:10px;padding:8px 12px 8px 36px;color:var(--ink)}
+  ul.notes li.n-warn::before{content:"!";background:var(--warn);left:10px;top:10px}
+  ul.notes li.n-bad{background:var(--bad-bg);border-radius:10px;padding:8px 12px 8px 36px;color:var(--bad);font-weight:500}
+  ul.notes li.n-bad::before{content:"\00d7";background:var(--bad);left:10px;top:10px;font-size:14px}
+  ul.notes:empty{display:none}
+
   .chipline{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-  .tag{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:11px;border:1px solid var(--line);background:var(--paper)}
-  .tag.pull{border-color:#e3b9b9;background:#fdf2f2;color:#9c2b2b}
-  .tag.mkt{border-color:#e6cfa6;background:#fdf7ec;color:#8a5f14}
-  .tag.place{border-color:#a8d9df;background:#eefafb;color:#0a6b76}
-  .tag.miss{border-color:#d8dfe4;background:#f4f6f7;color:var(--ink-soft)}
+  .tag{font-family:var(--mono);font-size:11.5px;padding:3px 9px;border-radius:999px;background:var(--fill);color:var(--ink)}
+  .tag.pull{background:var(--bad-bg);color:var(--bad)}
+  .tag.mkt{background:var(--warn-bg);color:var(--warn)}
+  .tag.place{background:var(--accent-soft);color:var(--accent)}
+  .tag.miss{background:var(--fill-soft);color:var(--ink-soft)}
 
-  .tablewrap{overflow:auto;max-height:420px;border:1px solid var(--line);border-radius:6px}
-  table{border-collapse:collapse;font-size:12.5px}
-  th{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);
-     text-align:left;padding:6px 9px;border-bottom:2px solid var(--line);background:#f7fafb;position:sticky;top:0;white-space:nowrap}
-  td{padding:5px 9px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px;
-     white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis}
-  .empty{color:var(--ink-soft);text-align:center;padding:32px 10px;font-size:13px}
-  .counts{font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
-  .counts b{color:var(--ink)}
+  /* ---------- Pharmasave ---------- */
+  .fadmin{background:var(--fill-soft);border-radius:14px;padding:18px;margin:14px 0 22px}
+  .fadmin .f-title{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px}
+  .fadmin ol{margin:8px 0 12px 20px;font-size:13px;color:var(--ink-soft);display:grid;gap:2px}
+  .fadmin ol b{color:var(--ink);font-weight:500}
+  .kbd{font-family:var(--sans);font-size:11.5px;font-weight:500;padding:1px 6px;border-radius:5px;background:var(--card);
+    border:.5px solid var(--line-strong);color:var(--ink)}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+  #psFadminStatus{margin-top:10px}
+  #psFadminStatus:empty{display:none}
+  .status{display:flex;gap:8px;align-items:flex-start;font-size:13px;border-radius:10px;padding:9px 12px}
+  .status.s-ok{background:var(--ok-bg);color:var(--ink)}
+  .status.s-warn{background:var(--warn-bg);color:var(--ink)}
+  .status.s-bad{background:var(--bad-bg);color:var(--bad)}
+  .status + .status{margin-top:6px}
+  .modeline{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:10px 0 14px}
+  #psSameWrap{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;color:var(--ink-soft)}
+  table.zones td{max-width:none;vertical-align:middle}
+  table.zones td.num{text-align:right;color:var(--ink-soft)}
+  table.zones td:first-child{font-family:var(--sans);font-weight:600;font-size:13.5px}
 
-  .toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
-         padding:11px 18px;border-radius:6px;font-size:13.5px;z-index:60;box-shadow:0 4px 14px rgba(0,0,0,.25);max-width:90vw}
-  .toast.err{background:#b23434}
-  @media (prefers-reduced-motion: reduce){*{transition:none !important}}
+  /* ---------- tables ---------- */
+  .tablewrap{overflow:auto;max-height:440px;border:.5px solid var(--line-strong);border-radius:12px;background:var(--card)}
+  table{border-collapse:separate;border-spacing:0;font-size:13px;width:max-content;min-width:100%}
+  th{font-size:12px;font-weight:600;color:var(--ink-soft);text-align:left;padding:9px 12px;white-space:nowrap;
+     border-bottom:.5px solid var(--line-strong);background:var(--card);position:sticky;top:0;z-index:1}
+  td{padding:8px 12px;border-bottom:.5px solid var(--line);font-family:var(--mono);font-size:12px;
+     white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover td{background:var(--fill-soft)}
+  td:first-child{font-family:var(--sans);font-weight:500;font-size:13px}
+
+  /* ---------- result ---------- */
+  .counts{font-size:13px;color:var(--ink-soft);margin-left:auto}
+  .counts b{color:var(--ink);font-weight:500}
+  .runrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .empty{color:var(--ink-faint);text-align:center;padding:40px 10px 20px;font-size:14px}
+  .empty svg{display:block;margin:0 auto 10px;opacity:.5}
+
+  .toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:60;max-width:90vw;
+    background:rgba(29,29,31,.88);color:#fff;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+    padding:11px 20px;border-radius:999px;font-size:14px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,.2);
+    animation:toastIn .35s cubic-bezier(.2,.9,.3,1.2)}
+  .toast.err{background:rgba(215,0,21,.92)}
+  @keyframes toastIn{from{opacity:0;transform:translate(-50%,12px) scale(.96)}to{opacity:1;transform:translate(-50%,0) scale(1)}}
+
+  @media (max-width:640px){
+    main{padding:28px 16px 60px}
+    .hero h1{font-size:32px}
+    .hero p{font-size:17px}
+    .card{padding:20px}
+    .privacy span{display:none}
+    header .pill{display:none}
+  }
+  @media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important}}
 </style>
 </head>
 <body>
 
 <header>
-  <div class="brand">CXE Codesheet Converter <span class="stamp">FLIPP INTERNAL</span></div>
+  <div class="appicon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg></div>
+  <div class="brand">Codesheet Converter</div>
+  <span class="pill">CXE · Flipp internal</span>
   <div class="spacer"></div>
-  <div class="privacy">files are processed in your browser — nothing is uploaded</div>
+  <div class="privacy"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Processed in your browser — nothing is uploaded</span></div>
 </header>
 
 <main>
+  <div class="hero">
+    <h1>Codesheet Converter</h1>
+    <p>Turn a retailer’s rough codesheet into a fadmin-ready file.</p>
+  </div>
+
   <!-- ============ 1 · FILE ============ -->
   <section class="card">
-    <h2>1 · Codesheet file</h2>
+    <div class="card-head"><span class="step">1</span><h2>Codesheet file</h2></div>
     <div class="drop" id="dropZone">
-      Drop a rough codesheet here (or click) — <b>.csv</b>, <b>.xlsx</b>, or <b>.xls</b>.
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"/><path d="m7.5 8.5 4.5-4.5 4.5 4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+      <div class="dz-title">Drop a codesheet here</div>
+      <div class="dz-sub">.csv, .xlsx or .xls — or click to choose a file</div>
       <div id="fileChipWrap"></div>
     </div>
     <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" hidden>
@@ -104,44 +228,90 @@
 
   <!-- ============ 2 · RETAILER ============ -->
   <section class="card">
-    <h2>2 · Select retailer</h2>
-    <select id="retailerSelect" style="max-width:280px;border:1px solid var(--line);border-radius:6px;
-      padding:9px 11px;font-family:var(--sans);font-size:14px;color:var(--ink);background:#fff">
+    <div class="card-head"><span class="step">2</span><h2>Retailer</h2></div>
+    <div class="selectwrap"><select id="retailerSelect" aria-label="Retailer">
       <option value="">Choose a retailer…</option>
       <option value="vallarta">Vallarta</option>
       <option value="sprouts">Sprouts</option>
       <option value="target">Target USA</option>
-    </select>
-    <div class="notes" id="detectNote" style="margin-top:8px"></div>
+      <option value="pharmasave">Pharmasave</option>
+    </select></div>
+    <div class="notes" id="detectNote"></div>
 
-    <div id="targetPanel" style="display:none;margin-top:16px;padding-top:14px;border-top:1px dashed var(--line)">
-      <div class="sublabel">Page adjustments <span>— paste the retailer’s notes exactly as you received them, one per line</span></div>
+    <div id="targetPanel" class="subpanel" style="display:none">
+      <div class="sublabel">Page adjustments</div>
+      <div class="notes" style="margin-bottom:10px">Paste the retailer’s notes exactly as you received them, one per line.</div>
       <textarea id="targetInstr" spellcheck="false" placeholder="* There is images/copy changes for page 20 will notify when this page is ready.&#10;* Pages 6 &amp; 7 will not have HI market&#10;* Letter page B (Baby) follows page 29.&#10;* Letter page E (BTC) follows page 13.&#10;* Letter page F (Stat) follows page H.&#10;* Letter page G (Stat) follows page F.&#10;* Letter page H (BTS/C) follows 11.&#10;* Letter page J (Sprt) follows page 2"></textarea>
-      <div class="notes" id="instrParse" style="margin-top:8px"></div>
+      <div class="notes" id="instrParse" style="margin-top:10px"></div>
+    </div>
+
+    <div id="psPanel" class="subpanel" style="display:none">
+      <div class="sublabel">Page counts</div>
+
+      <div class="fadmin" id="psFadminBox">
+        <div class="f-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 10l-5 3.6L16.5 20 12 16.4 7.5 20 9 13.6 4 10l6.1-1.2z"/></svg>Auto-fill from fadmin</div>
+        <ol>
+          <li><b>Open the flyer’s FTP files</b> in fadmin (button below).</li>
+          <li>Select all and copy: <span class="kbd">⌘A</span> then <span class="kbd">⌘C</span>.</li>
+          <li>Come back and <b>paste</b> — the page counts fill themselves in.</li>
+        </ol>
+        <div class="actions">
+          <span id="psFadminLinks" style="display:contents"></span>
+          <button type="button" class="btn" id="psPasteBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>Paste from clipboard</button>
+        </div>
+        <textarea id="psPaste" spellcheck="false" placeholder="…or click here and press ⌘V"></textarea>
+        <div id="psFadminStatus"></div>
+      </div>
+
+      <div class="modeline">
+        <div class="seg" role="radiogroup" aria-label="Page count mode">
+          <label><input type="radio" name="psMode" value="same" checked>Same for all zones</label>
+          <label><input type="radio" name="psMode" value="zone">Different by zone</label>
+        </div>
+        <div id="psSameWrap">
+          <input type="number" class="pgcount" id="psSameCount" min="1" max="500" step="1" placeholder="—"> pages in every zone
+        </div>
+      </div>
+      <div id="psZoneTable"></div>
+      <div class="notes" id="psInfo" style="margin-top:12px"></div>
     </div>
   </section>
 
   <!-- ============ 3 · RUN ============ -->
   <section class="card">
-    <div class="head-row">
-      <h2>3 · Result</h2>
+    <div class="card-head">
+      <span class="step">3</span><h2>Result</h2>
       <span class="counts" id="resultCounts"></span>
     </div>
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <div class="runrow">
       <button class="primary" id="runBtn" disabled>Run conversion</button>
       <span id="dlWrap" style="display:inline-flex;align-items:center;gap:8px">
-        <select id="dlFormat" disabled style="border:1px solid var(--line);border-radius:6px;padding:9px 8px;
-          font-family:var(--sans);font-size:13px;background:#fff">
+        <select id="dlFormat" disabled>
           <option value="csv">.csv</option>
           <option value="xlsx">.xlsx</option>
           <option value="xls">.xls</option>
         </select>
-        <button class="btn" id="downloadBtn" disabled style="padding:9px 14px;font-size:13px">⬇ Download</button>
+        <button class="btn" id="downloadBtn" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/></svg>Download</button>
+      </span>
+      <span id="psDlWrap" style="display:none;align-items:center;gap:8px">
+        <button class="btn" id="dlCodesheet" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/></svg>Codesheet .csv</button>
+        <button class="btn" id="dlLinks" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/></svg>Links .xlsx</button>
       </span>
     </div>
-    <ul class="notes" id="runNotes" style="margin-top:12px"></ul>
-    <div class="tablewrap" id="previewWrap" style="display:none;margin-top:12px"></div>
-    <div class="empty" id="previewEmpty">Drop a file and run the conversion — a preview of the output appears here.</div>
+    <ul class="notes" id="runNotes" style="margin-top:18px"></ul>
+    <div class="tablewrap" id="previewWrap" style="display:none;margin-top:16px"></div>
+    <div id="linksPreview" style="display:none;margin-top:20px">
+      <div class="sublabel" style="margin-bottom:8px">Links file <span id="linksName"></span></div>
+      <div class="tablewrap" id="linksWrap"></div>
+    </div>
+    <div class="empty" id="previewEmpty">
+      <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M9 9v11"/></svg>
+      Drop a file and run the conversion — a preview appears here.
+    </div>
   </section>
 </main>
 
@@ -149,11 +319,13 @@
 /* ==================================================================
  * State
  * ================================================================== */
-var state = { grid:null, fileName:'', format:null, autoFormat:null, output:null, outName:'' };
+var state = { grid:null, fileName:'', format:null, autoFormat:null, output:null, outName:'',
+              links:null, linksName:'', ps:null, psCounts:{} };
 
 function $(id){ return document.getElementById(id); }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function toast(msg, isErr){
+  Array.prototype.forEach.call(document.querySelectorAll('.toast'), function(o){ o.remove(); });
   var t=document.createElement('div'); t.className='toast'+(isErr?' err':''); t.textContent=msg;
   document.body.appendChild(t); setTimeout(function(){ t.remove(); }, isErr?7000:3500);
 }
@@ -170,7 +342,7 @@ function processVallarta(grid){
   var headerIdx = grid.findIndex(function(row){
     return row.some(function(c){ return !isEmpty(c) && String(c).indexOf('Versions') !== -1; });
   });
-  if(headerIdx === -1) throw new Error('Couldn\u2019t find a header row containing "Versions" — is this a Vallarta codesheet?');
+  if(headerIdx === -1) throw new Error('Couldn’t find a header row containing "Versions" — is this a Vallarta codesheet?');
   notes.push('Header row found at sheet row <b>'+(headerIdx+1)+'</b>.');
 
   var width = Math.max.apply(null, grid.map(function(r){ return r.length; }));
@@ -254,7 +426,7 @@ function processSprouts(grid){
   var headerIdx = grid.findIndex(function(row){
     return row.some(function(c){ return !isEmpty(c) && String(c).indexOf('Version Code') !== -1; });
   });
-  if(headerIdx === -1) throw new Error('Couldn\u2019t find a header row containing "Version Code" — is this a Sprouts codesheet?');
+  if(headerIdx === -1) throw new Error('Couldn’t find a header row containing "Version Code" — is this a Sprouts codesheet?');
   notes.push('Header row found at sheet row <b>'+(headerIdx+1)+'</b>.');
 
   // 3. drop trailing empty / "Total # of Versions" rows (only below the header)
@@ -295,7 +467,7 @@ function parseTargetInstructions(text, marketCols){
   (marketCols||[]).forEach(function(m){ if(m) mkSet[String(m).toUpperCase()] = true; });
 
   String(text||'').split(/\r?\n/).forEach(function(raw){
-    var line = raw.replace(/^[\s*\u2022\u00b7\-\u2013]+/,'').trim();
+    var line = raw.replace(/^[\s*•·\-–]+/,'').trim();
     if(!line) return;
     var low = line.toLowerCase();
 
@@ -359,7 +531,7 @@ function processTarget(grid, instrText){
     var joined = grid[i].map(function(c){ return isEmpty(c)?'':String(c).trim(); }).join('|').toLowerCase();
     if(joined.indexOf('pg number') !== -1 && joined.indexOf('pdf') !== -1){ headerIdx = i; break; }
   }
-  if(headerIdx === -1) throw new Error('Couldn\u2019t find a header row containing "PDF" and "PG Number" — is this a Target USA codesheet?');
+  if(headerIdx === -1) throw new Error('Couldn’t find a header row containing "PDF" and "PG Number" — is this a Target USA codesheet?');
   notes.push('Header row found at sheet row <b>'+(headerIdx+1)+'</b>.');
 
   var width = Math.max.apply(null, grid.map(function(r){ return r.length; }));
@@ -400,7 +572,7 @@ function processTarget(grid, instrText){
 
   var ins = parseTargetInstructions(instrText, marketCols);
   if(!ins.parsed.length) warns.push('No page adjustments were recognised — the output is a straight clean-up with no pulls, market changes or letter pages placed.');
-  ins.unparsed.forEach(function(l){ warns.push('Couldn\u2019t interpret this line, so it was ignored: “'+esc(l)+'”'); });
+  ins.unparsed.forEach(function(l){ warns.push('Couldn’t interpret this line, so it was ignored: “'+esc(l)+'”'); });
 
   // normalise PDF filename + page token
   var addedPdf = 0;
@@ -436,7 +608,7 @@ function processTarget(grid, instrText){
   // 2) market exclusions
   ins.noMarket.forEach(function(rule){
     var ci = headerOut.indexOf(rule.market);
-    if(ci === -1){ warns.push('“'+rule.market+'” isn\u2019t a column in this file — that exclusion was skipped.'); return; }
+    if(ci === -1){ warns.push('“'+rule.market+'” isn’t a column in this file — that exclusion was skipped.'); return; }
     var cleared = 0;
     data.forEach(function(r){
       if(typeof r[1] === 'number' && rule.pages.indexOf(r[1]) !== -1 && !isEmpty(r[ci])){ r[ci] = null; cleared++; }
@@ -470,7 +642,7 @@ function processTarget(grid, instrText){
     if(groups[f.letter]) queue.push(f);
     else if(ins.pullLetters.indexOf(f.letter) !== -1)
       notes.push('Letter page <b>'+f.letter+'</b> was pulled, so its placement instruction was skipped.');
-    else warns.push('Instruction mentions letter page <b>'+f.letter+'</b>, but there\u2019s no such page in the file.');
+    else warns.push('Instruction mentions letter page <b>'+f.letter+'</b>, but there’s no such page in the file.');
   });
   var placed = {}, guard = 0;
   while(queue.length && guard++ < 80){
@@ -484,7 +656,7 @@ function processTarget(grid, instrText){
     queue = still;
   }
   queue.forEach(function(f){
-    warns.push('Couldn\u2019t place letter page <b>'+f.letter+'</b> after “'+f.after+'” — that page isn\u2019t in the file. Left at the end.');
+    warns.push('Couldn’t place letter page <b>'+f.letter+'</b> after “'+f.after+'” — that page isn’t in the file. Left at the end.');
     seq.push(f.letter); placed[f.letter] = true;
   });
   letterKeys.forEach(function(k){
@@ -514,19 +686,19 @@ function processTarget(grid, instrText){
     });
     var uniform = shortfalls.length && shortfalls.every(function(s){ return s === shortfalls[0]; });
     if(!bad.length){
-      notes.push('Page-count check <b class="ok">passed</b> for all '+checked+' markets against the sheet\u2019s totals row.');
+      notes.push('Page-count check <b class="ok">passed</b> for all '+checked+' markets against the sheet’s totals row.');
     } else if(uniform && pulledGroups && shortfalls[0] === pulledGroups){
-      notes.push('Page-count check: every market is short by exactly <b>'+pulledGroups+'</b> — the '+pulledGroups+' pulled page(s). The sheet\u2019s totals row was written before the pull, so this is expected.');
+      notes.push('Page-count check: every market is short by exactly <b>'+pulledGroups+'</b> — the '+pulledGroups+' pulled page(s). The sheet’s totals row was written before the pull, so this is expected.');
     } else if(uniform && bad.length === checked){
       var s = shortfalls[0];
-      warns.push('Page-count check: <b>all '+checked+' markets</b> are '+(s>0?'short by':'over by')+' <b>'+Math.abs(s)+'</b> page(s) versus the sheet\u2019s totals row'+
+      warns.push('Page-count check: <b>all '+checked+' markets</b> are '+(s>0?'short by':'over by')+' <b>'+Math.abs(s)+'</b> page(s) versus the sheet’s totals row'+
                  (pulledGroups ? ' ('+pulledGroups+' page(s) were pulled)' : '')+'. Usually that means a letter page is missing a placement instruction, or a pull was missed.');
     } else {
       warns.push('Page-count check <b>failed</b> for '+bad.length+' of '+checked+' market(s): '+bad.slice(0,8).join(', ')+
                  (bad.length>8 ? ' … and '+(bad.length-8)+' more' : '')+'. Re-read the adjustments before uploading.');
     }
   } else {
-    warns.push('No per-market totals row found above the header, so the page counts couldn\u2019t be cross-checked.');
+    warns.push('No per-market totals row found above the header, so the page counts couldn’t be cross-checked.');
   }
 
   return {
@@ -536,10 +708,304 @@ function processTarget(grid, instrText){
   };
 }
 
+// ---- FORMAT 4: PHARMASAVE ----
+/* Input: a "Zones | Stores | Page" grid (one row per zone, the zone's PDF in col C),
+   a label block, then "Pg N | link" rows. Output: a codesheet CSV with one
+   Page column per flyer page, plus a separate Pages/Links .xlsx. */
+var PS_LINK_RE = /^pg\.?\s*\d+/i;
+
+function psFindHeader(grid){
+  return grid.findIndex(function(row){
+    var cells = row.map(function(c){ return isEmpty(c) ? '' : String(c).trim().toLowerCase(); });
+    return cells.indexOf('zones') !== -1 && cells.indexOf('stores') !== -1;
+  });
+}
+
+function parsePharmasave(grid){
+  var h = psFindHeader(grid);
+  if(h === -1) throw new Error('Couldn’t find a header row with "Zones" and "Stores" — is this a Pharmasave digital schematic?');
+  var zones = [], links = [], skipped = [];
+  for(var i=h+1;i<grid.length;i++){
+    var r = grid[i] || [];
+    var a = isEmpty(r[0]) ? '' : String(r[0]).trim();
+    var b = isEmpty(r[1]) ? '' : String(r[1]).trim();
+    var c = isEmpty(r[2]) ? '' : String(r[2]).trim();
+    if(!a) continue;                                   // label rows ("Digital Schematic …", dates) have no col A
+    if(PS_LINK_RE.test(a)){ links.push({ page:a, link:b, row:i+1 }); continue; }
+    if(b && c){
+      var stores = b.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+      var pdf = /\.pdf$/i.test(c) ? c : c + '.pdf';
+      zones.push({ zone:a, stores:stores, pdf:pdf, base:pdf.replace(/\.pdf$/i,''), row:i+1, addedPdf:!/\.pdf$/i.test(c) });
+    } else {
+      skipped.push({ row:i+1, zone:a, missing: !b ? 'stores' : 'PDF name' });
+    }
+  }
+  if(!zones.length) throw new Error('No zone rows found under the Zones / Stores header.');
+  return { headerIdx:h, zones:zones, links:links, skipped:skipped };
+}
+
+// "DigitalSchematic26FD45REV 1 1.xlsx" → "DigitalSchematic26FD45REV" (drops the extension and browser copy suffixes)
+function psBaseName(fileName){
+  var b = String(fileName||'').replace(/\.(xlsx|xls|csv)$/i,'').trim();
+  b = b.replace(/(\s*\(\d+\))+$/,'').replace(/(\s+\d+)+$/,'').trim();
+  return b || 'Pharmasave';
+}
+
+function pad4(n){ var s = String(n); while(s.length < 4) s = '0' + s; return s; }
+
+function processPharmasave(grid, counts){
+  var notes = [], warns = [];
+  var ps = parsePharmasave(grid);
+  notes.push('Header row found at sheet row <b>'+(ps.headerIdx+1)+'</b> — <b>'+ps.zones.length+'</b> zone(s): '+
+    ps.zones.map(function(z){ return '<b>'+esc(z.zone)+'</b> ('+z.stores.length+' stores)'; }).join(', ')+'.');
+
+  // page counts (validated before Run is enabled, re-checked here)
+  var n = ps.zones.map(function(z){
+    var v = counts[z.zone];
+    if(!(v >= 1)) throw new Error('Enter the number of pages for '+z.zone+'.');
+    return v;
+  });
+  var maxPages = Math.max.apply(null, n), minPages = Math.min.apply(null, n);
+
+  var header = ['Zone','Store'];
+  for(var p=1;p<=maxPages;p++) header.push('Page '+p);
+  var rows = [header];
+  ps.zones.forEach(function(z, zi){
+    var row = [z.zone, z.stores.join(',')];
+    for(var p=1;p<=maxPages;p++) row.push(p <= n[zi] ? z.base + '_p' + pad4(p) + '.pdf' : '');
+    rows.push(row);
+  });
+  notes.push(maxPages === minPages
+    ? 'Split each zone’s PDF into <b>'+maxPages+'</b> page file(s) (<code>…_p0001.pdf</code> to <code>…_p'+pad4(maxPages)+'.pdf</code>).'
+    : 'Split each zone’s PDF by its own page count ('+ps.zones.map(function(z,zi){ return esc(z.zone)+': '+n[zi]; }).join(', ')+') — shorter zones have blank cells after their last page.');
+
+  ps.zones.forEach(function(z){ if(z.addedPdf) notes.push('Added <b>.pdf</b> to the PDF name for '+esc(z.zone)+'.'); });
+  var pdfUse = {};
+  ps.zones.forEach(function(z){ (pdfUse[z.pdf] = pdfUse[z.pdf] || []).push(z.zone); });
+  Object.keys(pdfUse).forEach(function(k){
+    if(pdfUse[k].length > 1) notes.push('<b>'+esc(k)+'</b> is shared by '+pdfUse[k].map(esc).join(', ')+' — they get the same page files.');
+  });
+  ps.skipped.forEach(function(s){ warns.push('Row '+s.row+' (“'+esc(s.zone)+'”) has no '+s.missing+', so it was left out.'); });
+
+  // store sanity: duplicates within / across zones
+  var seenStore = {}, dupes = [];
+  ps.zones.forEach(function(z){
+    z.stores.forEach(function(s){ if(seenStore[s] && dupes.indexOf(s) === -1) dupes.push(s); seenStore[s] = true; });
+  });
+  if(dupes.length) warns.push('Store(s) listed more than once: <b>'+dupes.slice(0,15).join(', ')+'</b>'+(dupes.length>15?' …':'')+'. Check with the retailer.');
+
+  // links file
+  var linkRows = [['Pages','Links']];
+  var seenPg = {};
+  ps.links.forEach(function(l){
+    linkRows.push([l.page, l.link]);
+    var num = parseInt(l.page.replace(/\D+/g,''), 10);
+    if(seenPg[num]) warns.push('<b>'+esc(l.page)+'</b> appears more than once in the links.');
+    seenPg[num] = true;
+    if(!l.link) warns.push('<b>'+esc(l.page)+'</b> has no link (row '+l.row+').');
+    ps.zones.forEach(function(z, zi){
+      if(num > n[zi]) warns.push('<b>'+esc(l.page)+'</b> has a link, but '+esc(z.zone)+' only has '+n[zi]+' page(s).');
+    });
+  });
+  if(ps.links.length) notes.push('Moved <b>'+ps.links.length+'</b> page link(s) to the links file.');
+  else warns.push('No “Pg N” link rows found — the links file will only have its header.');
+
+  var base = psBaseName(state.fileName);
+  return {
+    rows: rows, headerRow: true, notes: notes, warns: warns, csvPlain: true,
+    outName: base + 'Codesheet.csv',
+    links: linkRows, linksName: base + '_links.xlsx',
+    summary: ps.zones.length + ' zones · ' + maxPages + ' page column(s) · ' + ps.links.length + ' link(s)'
+  };
+}
+
+/* ---- Pharmasave page-count panel ---- */
+function psMode(){ var r = document.querySelector('input[name="psMode"]:checked'); return r ? r.value : 'same'; }
+function psParseCount(v){ v = String(v==null?'':v).trim(); return /^\d+$/.test(v) && +v >= 1 && +v <= 500 ? +v : null; }
+
+function psCurrentCounts(){
+  var out = {}, ok = !!state.ps;
+  if(!state.ps) return { ok:false, counts:out };
+  if(psMode() === 'same'){
+    var v = psParseCount($('psSameCount').value);
+    state.ps.zones.forEach(function(z){ out[z.zone] = v; });
+    ok = v !== null;
+  } else {
+    state.ps.zones.forEach(function(z){
+      var v = psParseCount(state.psCounts[z.zone]);
+      out[z.zone] = v; if(v === null) ok = false;
+    });
+  }
+  return { ok:ok, counts:out };
+}
+
+function renderPsPanel(){
+  state.ps = null;
+  if(!state.grid){ $('psFadminBox').style.display='none'; $('psZoneTable').innerHTML=''; $('psInfo').innerHTML = 'Load a Pharmasave digital schematic to see its zones.'; return; }
+  try{ state.ps = parsePharmasave(state.grid); }
+  catch(err){ $('psFadminBox').style.display='none'; $('psZoneTable').innerHTML=''; $('psInfo').innerHTML = '<span class="bad">'+esc(err.message)+'</span>'; return; }
+  $('psFadminBox').style.display = '';
+  $('psFadminLinks').innerHTML = psFlyerCodes().map(function(code){
+    return '<a class="btn" href="'+esc(psFadminUrl(code,1))+'" target="_blank" rel="noopener">'+
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>'+
+      'Open '+esc(code)+' in fadmin</a>';
+  }).join('');
+
+  var mode = psMode();
+  $('psSameWrap').style.display = mode === 'same' ? '' : 'none';
+  var html = '<div class="tablewrap" style="max-height:none;display:inline-block;max-width:100%"><table class="zones"><thead><tr>'+
+             '<th>Zone</th><th>PDF</th><th>Stores</th><th>Pages</th></tr></thead><tbody>';
+  state.ps.zones.forEach(function(z, i){
+    var val = mode === 'same' ? $('psSameCount').value : (state.psCounts[z.zone] == null ? '' : state.psCounts[z.zone]);
+    html += '<tr><td>'+esc(z.zone)+'</td><td>'+esc(z.pdf)+'</td><td class="num">'+z.stores.length+'</td>'+
+            '<td><input type="number" class="pgcount psZoneCount" data-zone="'+esc(z.zone)+'" min="1" max="500" step="1" value="'+esc(val)+'"'+
+            (mode === 'same' ? ' disabled' : '')+'></td></tr>';
+  });
+  html += '</tbody></table></div>';
+  $('psZoneTable').innerHTML = html;
+
+  var info = 'Found <b>'+state.ps.zones.length+'</b> zone(s) and <b>'+state.ps.links.length+'</b> page link(s)';
+  if(state.ps.links.length) info += ': '+state.ps.links.map(function(l){ return esc(l.page); }).join(', ');
+  info += '.';
+  $('psInfo').innerHTML = info;
+
+  Array.prototype.forEach.call(document.querySelectorAll('.psZoneCount'), function(inp){
+    inp.addEventListener('input', function(){
+      state.psCounts[this.getAttribute('data-zone')] = this.value;
+      psValidateInputs(); resetResult(); updateRun();
+    });
+  });
+  psValidateInputs();
+}
+
+function psValidateInputs(){
+  var mode = psMode();
+  $('psSameCount').classList.toggle('invalid', mode === 'same' && $('psSameCount').value !== '' && psParseCount($('psSameCount').value) === null);
+  Array.prototype.forEach.call(document.querySelectorAll('.psZoneCount'), function(inp){
+    inp.classList.toggle('invalid', mode === 'zone' && inp.value !== '' && psParseCount(inp.value) === null);
+  });
+}
+
+Array.prototype.forEach.call(document.querySelectorAll('input[name="psMode"]'), function(r){
+  r.addEventListener('change', function(){
+    // switching to per-zone: start every zone at the shared number
+    if(psMode() === 'zone' && state.ps){
+      var v = $('psSameCount').value;
+      state.ps.zones.forEach(function(z){ if(isEmpty(state.psCounts[z.zone])) state.psCounts[z.zone] = v; });
+    }
+    renderPsPanel(); resetResult(); updateRun();
+  });
+});
+$('psSameCount').addEventListener('input', function(){
+  var v = this.value;
+  Array.prototype.forEach.call(document.querySelectorAll('.psZoneCount'), function(inp){ inp.value = v; });
+  psValidateInputs(); resetResult(); updateRun();
+});
+
+/* ---- Pharmasave: read page counts from a copied fadmin FTP-files page ----
+   fadmin has no CORS and needs your login, so the tool can't fetch it directly.
+   Instead the user copies the FTP files list (⌘A ⌘C) and pastes it here; fadmin
+   lists every split page as <pdf base>_p0001.pdf … (lower-cased), so the highest
+   _pNNNN per zone PDF is that zone's page count. */
+var PS_MERCHANT_ID = 3370;
+var PS_PER_PAGE = 50;   // fadmin's FTP list page size
+
+function psFlyerCodes(){
+  // "26F045_West" → "26F045"; usually one code per sheet
+  var seen = {}, out = [];
+  (state.ps ? state.ps.zones : []).forEach(function(z){
+    var c = (z.base.match(/^[^_\s]+/) || [z.base])[0];
+    if(!seen[c.toLowerCase()]){ seen[c.toLowerCase()] = true; out.push(c); }
+  });
+  return out;
+}
+function psFadminUrl(code, page){
+  return 'https://fadmin.flippback.com/merchants/'+PS_MERCHANT_ID+'/ftp_files?search_text='+encodeURIComponent(code)+
+         '&date=&hide_upload=0'+(page > 1 ? '&page='+page : '');
+}
+
+function psParseFadmin(text){
+  var found = {}, m, re = /([A-Za-z0-9][A-Za-z0-9_\-]*?)_p(\d{3,5})\.pdf/gi;
+  while((m = re.exec(text)) !== null){
+    var b = m[1].toLowerCase(), n = parseInt(m[2], 10);
+    (found[b] = found[b] || {})[n] = true;
+  }
+  // "Displaying files 1 - 50 of 98 in total" → more pages to copy
+  var shownTo = 0, total = 0, re2 = /Displaying files\s+\d+\s*-\s*(\d+)\s+of\s+(\d+)/gi;
+  while((m = re2.exec(text)) !== null){ shownTo = Math.max(shownTo, +m[1]); total = Math.max(total, +m[2]); }
+  return { found:found, shownTo:shownTo, total:total };
+}
+
+function psApplyFadmin(){
+  var box = $('psFadminStatus'), txt = $('psPaste').value;
+  if(!state.ps || !txt.trim()){ box.innerHTML = ''; return; }
+  var r = psParseFadmin(txt), codes = psFlyerCodes();
+  var counts = {}, missing = [], gaps = [], msgs = [];
+
+  state.ps.zones.forEach(function(z){
+    var f = r.found[z.base.toLowerCase()];
+    if(!f){ missing.push(z.zone); return; }
+    var nums = Object.keys(f).map(Number), max = Math.max.apply(null, nums), holes = [];
+    for(var i=1;i<=max;i++) if(!f[i]) holes.push(i);
+    counts[z.zone] = max;
+    if(holes.length) gaps.push('<b>'+esc(z.zone)+'</b> is missing '+(holes.length > 5
+      ? holes.length+' of its '+max+' page files'
+      : 'p'+holes.map(pad4).join(', p')));
+  });
+
+  var vals = Object.keys(counts).map(function(k){ return counts[k]; });
+  if(!vals.length){
+    box.innerHTML = '<div class="status s-bad">No split pages for <b>'+esc(codes.join(', '))+'</b> in what you pasted. '+
+      'Make sure you copied the fadmin page for this flyer and that the <code>…_p0001.pdf</code> files have synced.</div>';
+    return;
+  }
+
+  var uniq = vals.filter(function(v,i){ return vals.indexOf(v) === i; });
+  if(uniq.length === 1 && !missing.length){
+    document.querySelector('input[name="psMode"][value="same"]').checked = true;
+    $('psSameCount').value = uniq[0];
+  } else {
+    document.querySelector('input[name="psMode"][value="zone"]').checked = true;
+    state.ps.zones.forEach(function(z){ if(counts[z.zone]) state.psCounts[z.zone] = String(counts[z.zone]); });
+  }
+  renderPsPanel();
+
+  msgs.push('<div class="status s-ok"><span class="ok">✓</span><div>Filled from fadmin — '+
+    state.ps.zones.filter(function(z){ return counts[z.zone]; })
+      .map(function(z){ return '<b>'+esc(z.zone)+'</b> '+counts[z.zone]; }).join(' · ')+'</div></div>');
+  if(r.total && r.shownTo < r.total){
+    var next = Math.floor(r.shownTo / PS_PER_PAGE) + 1;
+    msgs.push('<div class="status s-warn"><span class="warn">!</span><div>fadmin showed files 1–'+r.shownTo+' of '+r.total+
+      ', so some pages may be missing. <a href="'+esc(psFadminUrl(codes[0], next))+'" target="_blank" rel="noopener">Open page '+next+' ↗</a> '+
+      'and paste it under the first one.</div></div>');
+  }
+  if(missing.length) msgs.push('<div class="status s-warn"><span class="warn">!</span><div>No pages found for <b>'+missing.map(esc).join(', ')+
+    '</b> — enter those by hand.</div></div>');
+  gaps.forEach(function(g){ msgs.push('<div class="status s-warn"><span class="warn">!</span><div>'+g+' — check fadmin before running.</div></div>'); });
+  box.innerHTML = msgs.join('');
+  resetResult(); updateRun();
+}
+
+$('psPaste').addEventListener('input', psApplyFadmin);
+$('psPasteBtn').addEventListener('click', function(){
+  if(!navigator.clipboard || !navigator.clipboard.readText){
+    toast('Your browser blocked clipboard access — click the box and press ⌘V instead.', true); $('psPaste').focus(); return;
+  }
+  navigator.clipboard.readText().then(function(t){
+    if(!t || !t.trim()){ toast('Your clipboard is empty — copy the fadmin page first.', true); return; }
+    var ta = $('psPaste');
+    ta.value = (ta.value.trim() ? ta.value + '\n' : '') + t;
+    psApplyFadmin();
+  }).catch(function(){
+    toast('Couldn’t read the clipboard — click the box and press ⌘V instead.', true); $('psPaste').focus();
+  });
+});
+
 /* ==================================================================
  * File handling
  * ================================================================== */
 function detectFormat(grid){
+  if(psFindHeader(grid.slice(0,40)) !== -1) return 'pharmasave';
   var joined = grid.slice(0,40).map(function(r){ return r.map(function(c){ return isEmpty(c)?'':String(c); }).join('|'); }).join('\n');
   if(/PG Number/i.test(joined) && /PDF/i.test(joined)) return 'target';
   if(joined.indexOf('Version Code') !== -1) return 'sprouts';
@@ -555,20 +1021,23 @@ function handleFile(file){
       var ws = wb.Sheets[wb.SheetNames[0]];
       var grid = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:false});
       if(!grid.length){ toast('That file looks empty.', true); return; }
-      state.grid = grid; state.fileName = file.name; state.output = null;
-      $('fileChipWrap').innerHTML = '<span class="filechip">📄 '+esc(file.name)+' · '+grid.length+' rows</span>';
+      state.grid = grid; state.fileName = file.name; state.output = null; state.psCounts = {};
+      $('psSameCount').value = '';   // page counts change week to week — never carry them over
+      $('psPaste').value = ''; $('psFadminStatus').innerHTML = '';
+      $('fileChipWrap').innerHTML = '<span class="filechip"><svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="var(--ok)"/><path d="m7.5 12.5 3 3 6-6.5" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'+
+        esc(file.name)+' <span class="meta">· '+grid.length+' rows</span></span>';
       // auto-detect
       state.autoFormat = detectFormat(grid);
       if(state.autoFormat){
         selectFormat(state.autoFormat, true);
       } else {
         selectFormat(null, false);
-        $('detectNote').innerHTML = '<span class="bad">Couldn\u2019t auto-detect the retailer</span> — choose one from the dropdown before running.';
+        $('detectNote').innerHTML = '<span class="bad">Couldn’t auto-detect the retailer</span> — choose one from the dropdown before running.';
       }
       resetResult();
       updateRun();
       toast('Loaded '+file.name+'.');
-    }catch(err){ toast('Couldn\u2019t read that file: '+err.message, true); }
+    }catch(err){ toast('Couldn’t read that file: '+err.message, true); }
   };
   reader.readAsArrayBuffer(file);
 }
@@ -583,16 +1052,20 @@ dz.addEventListener('drop', function(e){ if(e.dataTransfer.files[0]) handleFile(
 /* ==================================================================
  * Format selection
  * ================================================================== */
-var RETAILER_LABEL = { vallarta:'Vallarta', sprouts:'Sprouts', target:'Target USA' };
+var RETAILER_LABEL = { vallarta:'Vallarta', sprouts:'Sprouts', target:'Target USA', pharmasave:'Pharmasave' };
 
 function selectFormat(fmt, auto){
   state.format = fmt || null;
   $('retailerSelect').value = fmt || '';
   $('detectNote').innerHTML = fmt
-    ? (auto ? 'Auto-detected as <b>'+(RETAILER_LABEL[fmt]||fmt)+'</b> — change the dropdown if that\u2019s wrong.' : '')
+    ? (auto ? 'Auto-detected as <b>'+(RETAILER_LABEL[fmt]||fmt)+'</b> — change it in the dropdown if that’s wrong.' : '')
     : '';
   $('targetPanel').style.display = (fmt === 'target') ? '' : 'none';
+  $('psPanel').style.display = (fmt === 'pharmasave') ? '' : 'none';
+  $('dlWrap').style.display = (fmt === 'pharmasave') ? 'none' : 'inline-flex';
+  $('psDlWrap').style.display = (fmt === 'pharmasave') ? 'inline-flex' : 'none';
   if(fmt === 'target') renderInstrParse();
+  if(fmt === 'pharmasave') renderPsPanel();
   resetResult(); updateRun();
 }
 $('retailerSelect').addEventListener('change', function(){ selectFormat(this.value, false); });
@@ -630,40 +1103,54 @@ $('targetInstr').addEventListener('input', function(){ renderInstrParse(); reset
 /* ==================================================================
  * Run + output
  * ================================================================== */
-function updateRun(){ $('runBtn').disabled = !(state.grid && state.format); }
+function updateRun(){
+  var ready = !!(state.grid && state.format);
+  if(ready && state.format === 'pharmasave') ready = psCurrentCounts().ok;
+  $('runBtn').disabled = !ready;
+}
 function resetResult(){
-  state.output=null;
+  state.output=null; state.links=null;
   $('runNotes').innerHTML=''; $('resultCounts').textContent='';
   $('previewWrap').style.display='none'; $('previewEmpty').style.display='';
+  $('linksPreview').style.display='none';
   $('dlFormat').disabled = true; $('downloadBtn').disabled = true;
+  $('dlCodesheet').disabled = true; $('dlLinks').disabled = true;
 }
 
 $('runBtn').onclick = function(){
   if(!state.grid || !state.format) return;
   try{
     var res;
-    if(state.format === 'vallarta')    res = processVallarta(state.grid);
-    else if(state.format === 'sprouts') res = processSprouts(state.grid);
-    else                                res = processTarget(state.grid, $('targetInstr').value);
-    state.output = res.rows; state.outName = res.outName;
+    if(state.format === 'vallarta')        res = processVallarta(state.grid);
+    else if(state.format === 'sprouts')    res = processSprouts(state.grid);
+    else if(state.format === 'pharmasave') res = processPharmasave(state.grid, psCurrentCounts().counts);
+    else                                    res = processTarget(state.grid, $('targetInstr').value);
+    state.output = res.rows; state.outName = res.outName; state.csvPlain = !!res.csvPlain;
+    state.links = res.links || null; state.linksName = res.linksName || '';
 
-    var html = '<li class="ok">Done — preview below. Spot-check a few rows before uploading to fadmin.</li>';
+    var html = '<li class="n-ok">Done — preview below. Spot-check a few rows before uploading to fadmin.</li>';
     (res.notes || []).forEach(function(n){ html += '<li>'+n+'</li>'; });
-    (res.warns || []).forEach(function(w){ html += '<li><span class="warn">Check:</span> '+w+'</li>'; });
+    (res.warns || []).forEach(function(w){ html += '<li class="n-warn">'+w+'</li>'; });
     $('runNotes').innerHTML = html;
     $('resultCounts').innerHTML = '<b>'+res.summary+'</b>';
     renderPreview(res.rows, res.headerRow);
-    $('dlFormat').disabled = false; $('downloadBtn').disabled = false;
+    if(state.links){
+      $('linksWrap').innerHTML = tableHtml(state.links, true, 60, 40);
+      $('linksName').textContent = '— ' + state.linksName;
+      $('linksPreview').style.display = '';
+      $('dlCodesheet').disabled = false; $('dlLinks').disabled = false;
+    } else {
+      $('dlFormat').disabled = false; $('downloadBtn').disabled = false;
+    }
     toast('Conversion complete.');
   }catch(err){
     resetResult();
-    $('runNotes').innerHTML = '<li class="bad">'+esc(err.message)+'</li>';
+    $('runNotes').innerHTML = '<li class="n-bad">'+esc(err.message)+'</li>';
     toast(err.message, true);
   }
 };
 
-function renderPreview(rows, headerRow){
-  var maxRows = 60, maxCols = 40;
+function tableHtml(rows, headerRow, maxRows, maxCols){
   var html = '<table><thead><tr>';
   var width = Math.min(maxCols, Math.max.apply(null, rows.map(function(r){ return r.length; })));
   var body = rows;
@@ -680,10 +1167,34 @@ function renderPreview(rows, headerRow){
     html += '</tr>';
   });
   html += '</tbody></table>';
-  $('previewWrap').innerHTML = html;
+  return html;
+}
+
+function renderPreview(rows, headerRow){
+  var maxRows = 60, maxCols = 40;
+  var body = (headerRow && rows.length > 1) ? rows.slice(1) : rows;
+  $('previewWrap').innerHTML = tableHtml(rows, headerRow, maxRows, maxCols);
   $('previewWrap').style.display='';
   $('previewEmpty').style.display='none';
   if(body.length > maxRows) $('resultCounts').innerHTML += ' <span style="color:var(--ink-soft)">(previewing first '+maxRows+' rows)</span>';
+}
+
+function toCsv(rows){
+  return rows.map(function(r){
+    return r.map(function(c){
+      var v = isEmpty(c) ? '' : String(c);
+      return /[",\n\r]/.test(v) ? '"'+v.split('"').join('""')+'"' : v;
+    }).join(',');
+  }).join('\r\n');
+}
+
+function saveCsv(rows, name, plain){
+  // plain = no BOM (Pharmasave's fadmin template is plain UTF-8)
+  var blob = new Blob([(plain ? '' : '﻿') + toCsv(rows)], {type:'text/csv;charset=utf-8'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
 }
 
 $('downloadBtn').onclick = function(){
@@ -697,17 +1208,16 @@ $('downloadBtn').onclick = function(){
     XLSX.writeFile(wb, state.outName.replace(/\.csv$/,'') + '.' + fmt);
     return;
   }
-  var csv = state.output.map(function(r){
-    return r.map(function(c){
-      var v = isEmpty(c) ? '' : String(c);
-      return /[",\n\r]/.test(v) ? '"'+v.split('"').join('""')+'"' : v;
-    }).join(',');
-  }).join('\r\n');
-  var blob = new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8'});
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = state.outName;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
+  saveCsv(state.output, state.outName, state.csvPlain);
+};
+
+$('dlCodesheet').onclick = function(){ if(state.output) saveCsv(state.output, state.outName, true); };
+$('dlLinks').onclick = function(){
+  if(!state.links) return;
+  var ws = XLSX.utils.aoa_to_sheet(state.links.map(function(r){ return r.map(function(c){ return String(c==null?'':c); }); }));
+  ws['!cols'] = [{wch:10},{wch:72}];
+  var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+  XLSX.writeFile(wb, state.linksName);
 };
 </script>
 </body>
