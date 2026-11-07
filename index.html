@@ -721,67 +721,146 @@ function processTarget(grid, instrText){
 }
 
 // ---- FORMAT 4: PHARMASAVE ----
-/* Input: a "Zones | Stores | <PDF>" grid (one row per zone), optionally a "Page count"
-   column, a label block, then link rows. The retailer has sent two link-row styles:
-     "Pg 2 | https://…"                      (Oct 2026)
-     "p. 2 | <creative>.pdf | https://…"     (Nov 2026)
+/* Pharmasave "Digital Schematic" sheets. The retailer builds these by hand, so the
+   layout drifts week to week. Everything below is located by content, not position:
+     header   a row with a "Zone(s)" cell and a "Store(s)" cell (any row, any order)
+     zones    rows under it with a zone name, a list of store numbers and a PDF name
+     counts   optional "Page count" column (Nov 2026 onward)
+     links    rows labelled Pg 2 / PG2 / p. 2 / Page 2 / Pg 2-3 … anywhere in the
+              workbook, with the URL in any cell to the right (Oct: col B, Nov: col C)
    Output: a codesheet CSV with one Page column per flyer page, plus a Pages/Links .xlsx. */
-var PS_LINK_RE = /^(?:pg|p|page)\.?\s*(\d+)\s*$/i;
-var PS_URL_RE  = /^https?:\/\//i;
+var PS_LINK_RE  = /^(?:pgs?|pp?|pages?)\s*\.?\s*#?\s*(\d{1,3})(?:\s*(-|–|—|to|&|and|,|\/|\+)\s*(\d{1,3}))?\s*[:.\-]?\s*$/i;
+var PS_URL_RE   = /^(?:https?:\/\/|www\.)\S+$/i;
+var PS_NOLINK_RE= /^(?:no\s*link(?:\s*(?:needed|required))?|n\/?a|none|not\s+needed|-+)$/i;
+
+function psCellStr(v){ return isEmpty(v) ? '' : String(v).replace(/ /g,' ').trim(); }
+function psNorm(s){ return psCellStr(s).toLowerCase().replace(/\s+/g,' '); }
 
 function psFindHeader(grid){
   return grid.findIndex(function(row){
-    var cells = row.map(function(c){ return isEmpty(c) ? '' : String(c).trim().toLowerCase(); });
-    return cells.indexOf('zones') !== -1 && cells.indexOf('stores') !== -1;
+    var cells = (row||[]).map(psNorm);
+    return cells.some(function(t){ return /^zones?$/.test(t); }) &&
+           cells.some(function(t){ return /^stores?\b/.test(t) || /^store\s*(#|numbers?|list)/.test(t); });
   });
 }
 
-function parsePharmasave(grid){
-  var h = psFindHeader(grid);
-  if(h === -1) throw new Error('Couldn’t find a header row with "Zones" and "Stores" — is this a Pharmasave digital schematic?');
-  var head = grid[h].map(function(c){ return isEmpty(c) ? '' : String(c).trim().toLowerCase(); });
-  var zCol = head.indexOf('zones'), sCol = head.indexOf('stores');
-  var cCol = head.findIndex(function(t){ return /page\s*count|#\s*of\s*pages|pages?\s*#/.test(t); });
-  var fCol = head.findIndex(function(t, i){ return i !== cCol && i !== zCol && i !== sCol && /file|page|pdf/.test(t); });
-  if(fCol === -1) fCol = sCol + 1;
-
-  var zones = [], links = [], skipped = [];
-  for(var i=h+1;i<grid.length;i++){
-    var r = grid[i] || [];
-    var cell = function(c){ return c < 0 || isEmpty(r[c]) ? '' : String(r[c]).trim(); };
-    var a = cell(zCol);
-    if(!a) continue;                                   // label rows ("Digital Schematic …", dates) have no zone cell
-
-    var lm = a.match(PS_LINK_RE);
-    if(lm){
-      // the link is whichever cell holds a URL; otherwise the last filled cell ("No Link needed")
-      var rest = [];
-      for(var c=zCol+1;c<r.length;c++) if(!isEmpty(r[c])) rest.push(String(r[c]).trim());
-      var url = rest.filter(function(v){ return PS_URL_RE.test(v); })[0];
-      links.push({ page:'Pg ' + (+lm[1]), num:+lm[1], label:a, link: url || rest[rest.length-1] || '', row:i+1 });
-      continue;
-    }
-
-    var b = cell(sCol), f = cell(fCol);
-    if(b && f && /^\d[\d,\s]*$/.test(b)){
-      var stores = b.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
-      var pdf = /\.pdf$/i.test(f) ? f : f + '.pdf';
-      var cnt = cell(cCol); cnt = /^\d+$/.test(cnt) && +cnt > 0 ? +cnt : null;
-      zones.push({ zone:a, stores:stores, pdf:pdf, base:pdf.replace(/\.pdf$/i,''), row:i+1, addedPdf:!/\.pdf$/i.test(f), sheetCount:cnt });
-    } else {
-      skipped.push({ row:i+1, zone:a, missing: !b ? 'store list' : (!f ? 'PDF name' : 'store list (it isn’t a list of store numbers)') });
-    }
-  }
-  if(!zones.length) throw new Error('No zone rows found under the Zones / Stores header.');
-  return { headerIdx:h, zones:zones, links:links, skipped:skipped,
-           hasCountCol: cCol !== -1, allCounted: zones.every(function(z){ return z.sheetCount; }) };
+// "001, 006;008\n010" → ["001","006","008","010"]; anything that isn't digits is reported, not kept
+function psSplitStores(s){
+  var toks = psCellStr(s).split(/[\s,;|]+/).filter(Boolean), stores = [], junk = [];
+  toks.forEach(function(t){ if(/^\d+$/.test(t)) stores.push(t); else junk.push(t); });
+  return { stores:stores, junk:junk };
 }
 
-// "Digital+Schematic+26FM47 1.xlsx" → "DigitalSchematic26FM47" (drops extension, copy suffixes, spaces and +)
+function psParseLinkLabel(a){
+  var m = psCellStr(a).match(PS_LINK_RE);
+  if(!m) return null;
+  var p1 = +m[1], p2 = m[3] ? +m[3] : null, sep = (m[2]||'').toLowerCase(), pages = [p1];
+  if(p2 !== null){
+    if(/^(-|–|—|to)$/.test(sep) && p2 > p1 && p2 - p1 <= 50){ pages = []; for(var i=p1;i<=p2;i++) pages.push(i); }
+    else if(p2 !== p1) pages.push(p2);
+  }
+  return { pages:pages, label:psCellStr(a) };
+}
+
+/* Scan one sheet for link rows. skipRows = zone rows already claimed. */
+function psScanLinks(sheet, skipRows, out){
+  var grid = sheet.grid, hyper = sheet.hyper || {};
+  for(var i=0;i<grid.length;i++){
+    if(skipRows && skipRows[i]) continue;
+    var r = grid[i] || [];
+    for(var c=0;c<r.length;c++){
+      var lab = psParseLinkLabel(r[c]);
+      if(!lab) continue;
+      // everything to the right of the label; a hyperlinked cell counts as its target
+      var urls = [], texts = [];
+      for(var k=c+1;k<Math.max(r.length, c+8);k++){
+        var t = hyper[i+','+k] || psCellStr(r[k]);
+        if(!t) continue;
+        if(PS_URL_RE.test(t)) { if(urls.indexOf(t) === -1) urls.push(t); }
+        else texts.push(t);
+      }
+      var noLink = texts.filter(function(t){ return PS_NOLINK_RE.test(t); })[0];
+      var looseUrl = texts.filter(function(t){ return /https?:\/\//i.test(t) || /^[a-z0-9-]+(\.[a-z0-9-]+)+\.[a-z]{2,}(\/\S*)?$/i.test(t) || /\.(com|ca)(\/\S*)?$/i.test(t); })[0];
+      out.push({ pages:lab.pages, label:lab.label, sheet:sheet.name, row:i+1,
+                 link: urls[0] || looseUrl || noLink || '', urls:urls, kind: urls[0] ? 'url' : (looseUrl ? 'loose' : (noLink ? 'none' : 'missing')) });
+      break;   // one label per row
+    }
+  }
+}
+
+function psSheetFor(grid){
+  var s = (state.sheets || []).filter(function(x){ return x.grid === grid; })[0];
+  return s || { name:'Sheet1', grid:grid, hyper:{} };
+}
+
+function parsePharmasave(grid){
+  var main = psSheetFor(grid);
+  var h = psFindHeader(grid);
+  if(h === -1) throw new Error('Couldn’t find a header row with “Zones” and “Stores” — is this a Pharmasave digital schematic?');
+  var head = (grid[h]||[]).map(psNorm);
+  var zCol = head.findIndex(function(t){ return /^zones?$/.test(t); });
+  var sCol = head.findIndex(function(t){ return /^stores?\b/.test(t) || /^store\s*(#|numbers?|list)/.test(t); });
+  var cCol = head.findIndex(function(t){ return /page\s*count|#\s*of\s*pages|no\.?\s*of\s*pages|num(ber)?\s*of\s*pages|^pages?\s*#$|^#\s*pages$|^count$|^pages$/.test(t); });
+  var fCol = head.findIndex(function(t, i){ return i !== cCol && i !== zCol && i !== sCol && /file|pdf|^page$/.test(t); });
+
+  var zones = [], skipped = [], ignored = [], zoneRows = {}, notes = [];
+  for(var i=h+1;i<grid.length;i++){
+    var r = grid[i] || [];
+    var a = psCellStr(r[zCol]).replace(/\s+/g,' ');
+    var st = psSplitStores(r[sCol]);
+    // PDF: the file-name column, else any cell on the row that ends in .pdf
+    var f = fCol !== -1 ? psCellStr(r[fCol]) : '';
+    if(!f){ for(var c=0;c<r.length;c++){ if(c !== sCol && /\.pdf$/i.test(psCellStr(r[c]))){ f = psCellStr(r[c]); break; } } }
+    var isLinkLabel = (r||[]).some(function(v){ return !!psParseLinkLabel(v); });
+    // a store list is mostly store numbers — "Nov 20 - 21.pdf" (a creative name) is not
+    var storeList = st.stores.length > 0 && st.stores.length >= st.junk.length * 2;
+    // a link-label row is only a zone if it also has a clean store list and a real .pdf (zone "P1")
+    if(isLinkLabel && !(storeList && !st.junk.length && /\.pdf$/i.test(f) && psParseLinkLabel(a))) continue;
+
+    // a real zone row has numeric stores
+    if(storeList){
+      if(!a){ skipped.push({ row:i+1, why:'has stores'+(f?' and a PDF':'')+' but no zone name' }); zoneRows[i] = true; continue; }
+      if(!f){ skipped.push({ row:i+1, zone:a, why:'has no PDF / file name' }); zoneRows[i] = true; continue; }
+      var pdf = /\.pdf$/i.test(f) ? f : f + '.pdf';
+      var rawCnt = psCellStr(r[cCol]), cm = rawCnt.match(/^\s*(\d+)\s*(?:pages?|pgs?)?\s*$/i), cnt = null, badCnt = '';
+      if(cCol !== -1 && rawCnt){ if(cm && +cm[1] >= 1 && +cm[1] <= 500) cnt = +cm[1]; else badCnt = rawCnt; }
+      zones.push({ zone:a, stores:st.stores, junk:st.junk, pdf:pdf, base:pdf.replace(/\.pdf$/i,''),
+                   row:i+1, addedPdf:!/\.pdf$/i.test(f), sheetCount:cnt, badCount:badCnt });
+      zoneRows[i] = true;
+      continue;
+    }
+    if(a && f && /\.pdf$/i.test(f)){ skipped.push({ row:i+1, zone:a, why: psCellStr(r[sCol]) ? 'has no store numbers in the Stores cell (“'+psCellStr(r[sCol]).slice(0,40)+'”)' : 'has no stores' }); zoneRows[i] = true; continue; }
+    var txt = (r||[]).map(psCellStr).filter(Boolean).join(' · ');
+    if(txt) ignored.push({ row:i+1, text:txt });
+  }
+  if(!zones.length){
+    var why = skipped.length ? ' Rows that looked close: '+skipped.map(function(s){ return 'row '+s.row+' '+s.why; }).join('; ')+'.' : '';
+    throw new Error('No zone rows found under the Zones / Stores header (sheet row '+(h+1)+').'+why);
+  }
+
+  // links: this tab first; if it has none, every other tab
+  var links = [];
+  psScanLinks(main, zoneRows, links);
+  var linkSheets = links.length ? [main.name] : [];
+  if(!links.length){
+    (state.sheets || []).forEach(function(s){
+      if(s.grid === grid) return;
+      var before = links.length; psScanLinks(s, null, links);
+      if(links.length > before) linkSheets.push(s.name);
+    });
+  }
+  return { headerIdx:h, zones:zones, links:links, linkSheets:linkSheets, skipped:skipped, ignored:ignored,
+           sheetName:main.name, tabCount:(state.sheets||[]).length || 1,
+           hasCountCol: cCol !== -1, cols:{ zone:zCol, stores:sCol, file:fCol, count:cCol } };
+}
+
+// "Digital+Schematic+26FM47 1.xlsx" / "DigitalSchematic26FD45REV (2).xlsx" → "DigitalSchematic26FM47"
 function psBaseName(fileName){
-  var b = String(fileName||'').replace(/\.(xlsx|xls|csv)$/i,'').trim();
+  var b = String(fileName||'');
+  try{ b = decodeURIComponent(b); }catch(e){}
+  b = b.replace(/\.(xlsx|xlsm|xls|csv)$/i,'').trim();
   b = b.replace(/(\s*\(\d+\))+$/,'').replace(/(\s+\d+)+$/,'').trim();
-  b = b.replace(/[+\s]+/g,'');
+  b = b.replace(/[+\s]+/g,'').replace(/[\\\/:*?"<>|]+/g,'');
   return b || 'Pharmasave';
 }
 
@@ -790,7 +869,7 @@ function pad4(n){ var s = String(n); while(s.length < 4) s = '0' + s; return s; 
 function processPharmasave(grid, counts){
   var notes = [], warns = [];
   var ps = parsePharmasave(grid);
-  notes.push('Header row found at sheet row <b>'+(ps.headerIdx+1)+'</b> — <b>'+ps.zones.length+'</b> zone(s): '+
+  notes.push('Header row found at '+(ps.tabCount > 1 ? 'tab “'+esc(ps.sheetName)+'”, ' : '')+'sheet row <b>'+(ps.headerIdx+1)+'</b> — <b>'+ps.zones.length+'</b> zone(s): '+
     ps.zones.map(function(z){ return '<b>'+esc(z.zone)+'</b> ('+z.stores.length+' stores)'; }).join(', ')+'.');
 
   // page counts (validated before Run is enabled, re-checked here)
@@ -813,43 +892,69 @@ function processPharmasave(grid, counts){
     ? 'Split each zone’s PDF into <b>'+maxPages+'</b> page file(s) (<code>…_p0001.pdf</code> to <code>…_p'+pad4(maxPages)+'.pdf</code>).'
     : 'Split each zone’s PDF by its own page count ('+ps.zones.map(function(z,zi){ return esc(z.zone)+': '+n[zi]; }).join(', ')+') — shorter zones have blank cells after their last page.');
 
-  ps.zones.forEach(function(z){ if(z.addedPdf) notes.push('Added <b>.pdf</b> to the PDF name for '+esc(z.zone)+'.'); });
+  // ---- zone checks ----
+  ps.zones.forEach(function(z, zi){
+    if(z.addedPdf) notes.push('Added <b>.pdf</b> to the PDF name for '+esc(z.zone)+'.');
+    if(z.junk.length) warns.push('<b>'+esc(z.zone)+'</b>: removed non-store text from the Stores cell (“'+z.junk.slice(0,6).map(esc).join('”, “')+'”'+(z.junk.length>6?' …':'')+').');
+    if(z.badCount) warns.push('<b>'+esc(z.zone)+'</b>: the Page count cell says “'+esc(z.badCount)+'”, which isn’t a page number — it was ignored.');
+    if(z.sheetCount && z.sheetCount !== n[zi]) warns.push('<b>'+esc(z.zone)+'</b>: the sheet says <b>'+z.sheetCount+'</b> pages but the output uses <b>'+n[zi]+'</b>. Make sure that’s intended.');
+    var short = z.stores.filter(function(s){ return s.length < 3; });
+    if(short.length) warns.push('<b>'+esc(z.zone)+'</b>: store number(s) <b>'+short.slice(0,8).join(', ')+'</b> are under 3 digits — Excel may have dropped leading zeros (7 → 007). Check the sheet.');
+    if(/\s{2,}|^\s|\s$/.test(z.base)) warns.push('<b>'+esc(z.zone)+'</b>: the PDF name has extra spaces (“'+esc(z.pdf)+'”).');
+  });
+  var zoneSeen = {};
+  ps.zones.forEach(function(z){ var k = z.zone.toUpperCase(); if(zoneSeen[k]) warns.push('Zone <b>'+esc(z.zone)+'</b> appears more than once (rows '+zoneSeen[k]+' and '+z.row+').'); zoneSeen[k] = z.row; });
   var pdfUse = {};
-  ps.zones.forEach(function(z){ (pdfUse[z.pdf] = pdfUse[z.pdf] || []).push(z.zone); });
+  ps.zones.forEach(function(z){ (pdfUse[z.pdf.toLowerCase()] = pdfUse[z.pdf.toLowerCase()] || []).push(z.zone); });
   Object.keys(pdfUse).forEach(function(k){
     if(pdfUse[k].length > 1) notes.push('<b>'+esc(k)+'</b> is shared by '+pdfUse[k].map(esc).join(', ')+' — they get the same page files.');
   });
-  ps.skipped.forEach(function(s){ warns.push('Row '+s.row+' (“'+esc(s.zone)+'”) has no '+s.missing+', so it was left out.'); });
+  ps.skipped.forEach(function(s){ warns.push('Row '+s.row+(s.zone ? ' (“'+esc(s.zone)+'”)' : '')+' '+s.why+', so it was left out of the codesheet.'); });
+  if(ps.ignored.length) notes.push('Ignored '+ps.ignored.length+' label row(s): '+ps.ignored.slice(0,4).map(function(x){ return '“'+esc(x.text.slice(0,40))+'”'; }).join(', ')+(ps.ignored.length>4?' …':'')+'.');
 
-  // store sanity: duplicates within / across zones
   var seenStore = {}, dupes = [];
   ps.zones.forEach(function(z){
-    z.stores.forEach(function(s){ if(seenStore[s] && dupes.indexOf(s) === -1) dupes.push(s); seenStore[s] = true; });
+    var inZone = {};
+    z.stores.forEach(function(s){
+      if((seenStore[s] || inZone[s]) && dupes.indexOf(s) === -1) dupes.push(s);
+      inZone[s] = true;
+    });
+    Object.keys(inZone).forEach(function(s){ seenStore[s] = true; });
   });
   if(dupes.length) warns.push('Store(s) listed more than once: <b>'+dupes.slice(0,15).join(', ')+'</b>'+(dupes.length>15?' …':'')+'. Check with the retailer.');
 
-  // links file
-  var linkRows = [['Pages','Links']];
-  var seenPg = {};
+  // ---- links file ----
+  var linkRows = [['Pages','Links']], seenPg = {}, nLinks = 0;
   ps.links.forEach(function(l){
-    linkRows.push([l.page, l.link]);
-    var num = l.num;
-    if(seenPg[num]) warns.push('<b>'+esc(l.page)+'</b> appears more than once in the links.');
-    seenPg[num] = true;
-    if(!l.link) warns.push('<b>'+esc(l.page)+'</b> has no link (row '+l.row+').');
-    ps.zones.forEach(function(z, zi){
-      if(num > n[zi]) warns.push('<b>'+esc(l.page)+'</b> has a link, but '+esc(z.zone)+' only has '+n[zi]+' page(s).');
+    if(l.pages.length > 1) notes.push('“'+esc(l.label)+'” covers pages '+l.pages.join(', ')+' — added a row for each.');
+    if(l.urls.length > 1) warns.push('<b>'+esc(l.label)+'</b> has '+l.urls.length+' different links on one row — used the first one ('+esc(l.urls[0]).slice(0,60)+').');
+    if(l.kind === 'loose') warns.push('<b>'+esc(l.label)+'</b>: the link “'+esc(l.link)+'” has no <code>https://</code> — check it works.');
+    if(l.kind === 'missing') warns.push('<b>'+esc(l.label)+'</b> (row '+l.row+') has no link next to it — left blank in the links file.');
+    l.pages.forEach(function(num){
+      var pg = 'Pg ' + num;
+      linkRows.push([pg, l.link]); nLinks++;
+      if(num < 1) warns.push('<b>'+esc(l.label)+'</b> points to page 0.');
+      if(seenPg[num]) warns.push('<b>'+pg+'</b> appears more than once in the links.');
+      seenPg[num] = true;
+      ps.zones.forEach(function(z, zi){
+        if(num > n[zi]) warns.push('<b>'+pg+'</b> has a link, but '+esc(z.zone)+' only has '+n[zi]+' page(s).');
+      });
     });
   });
-  if(ps.links.length) notes.push('Moved <b>'+ps.links.length+'</b> page link(s) to the links file.');
-  else warns.push('No “Pg N” link rows found — the links file will only have its header.');
+  if(nLinks){
+    var where = ps.linkSheets.length && ps.linkSheets[0] !== ps.sheetName ? ' (found on tab “'+ps.linkSheets.map(esc).join('”, “')+'”)' : '';
+    notes.push('Moved <b>'+nLinks+'</b> page link(s) to the links file'+where+'.');
+  } else {
+    warns.push('This sheet has <b>no page links</b> — checked '+(ps.tabCount > 1 ? 'all '+ps.tabCount+' tabs' : 'the whole sheet')+
+               '. The links file will only have its header row. That’s expected if the retailer didn’t send links this week.');
+  }
 
   var base = psBaseName(state.fileName);
   return {
     rows: rows, headerRow: true, notes: notes, warns: warns, csvPlain: true,
     outName: base + 'Codesheet.csv',
     links: linkRows, linksName: base + '_links.xlsx',
-    summary: ps.zones.length + ' zones · ' + maxPages + ' page column(s) · ' + ps.links.length + ' link(s)'
+    summary: ps.zones.length + ' zones · ' + maxPages + ' page column(s) · ' + nLinks + ' link(s)'
   };
 }
 
@@ -1098,6 +1203,10 @@ function psApplyFadmin(){
   if(missing.length) msgs.push('<div class="status s-warn"><span class="warn">!</span><div>No pages found for <b>'+missing.map(esc).join(', ')+
     '</b> — enter those by hand.</div></div>');
   gaps.forEach(function(g){ msgs.push('<div class="status s-warn"><span class="warn">!</span><div>'+g+' — check fadmin before running.</div></div>'); });
+  state.ps.zones.forEach(function(z){
+    if(z.sheetCount && counts[z.zone] && z.sheetCount !== counts[z.zone])
+      msgs.push('<div class="status s-warn"><span class="warn">!</span><div><b>'+esc(z.zone)+'</b>: fadmin has <b>'+counts[z.zone]+'</b> pages but the sheet says <b>'+z.sheetCount+'</b>. Using fadmin’s number — check which is right.</div></div>');
+  });
   box.innerHTML = msgs.join('');
   resetResult(); updateRun();
 }
@@ -1150,19 +1259,46 @@ function detectFormat(grid){
   return null;
 }
 
+/* Grid of display strings for one tab, plus hyperlink targets keyed "row,col" in grid coordinates. */
+function readSheet(ws, name){
+  var grid = ws && ws['!ref'] ? XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:false, blankrows:true}) : [];
+  var hyper = {};
+  if(ws && ws['!ref']){
+    var rng = XLSX.utils.decode_range(ws['!ref']);
+    Object.keys(ws).forEach(function(addr){
+      if(addr.charAt(0) === '!') return;
+      var cell = ws[addr];
+      if(cell && cell.l && cell.l.Target && /^(https?:|www\.)/i.test(cell.l.Target)){
+        var rc = XLSX.utils.decode_cell(addr);
+        hyper[(rc.r - rng.s.r) + ',' + (rc.c - rng.s.c)] = String(cell.l.Target).trim();
+      }
+    });
+  }
+  return { name:name, grid:grid, hyper:hyper };
+}
+
 function handleFile(file){
   var reader = new FileReader();
   reader.onload = function(ev){
     try{
+      var bytes = new Uint8Array(ev.target.result.slice(0, 8));
+      if(/\.(xlsx|xlsm)$/i.test(file.name) && !(bytes[0] === 0x50 && bytes[1] === 0x4b)){
+        toast('Couldn’t read that file — it isn’t a real .xlsx (it may be damaged or only partly downloaded). Download it again from the email.', true); return;
+      }
       var wb = XLSX.read(ev.target.result, {type:'array', cellDates:true});
-      var ws = wb.Sheets[wb.SheetNames[0]];
-      var grid = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:false});
-      if(!grid.length){ toast('That file looks empty.', true); return; }
+      if(!wb.SheetNames || !wb.SheetNames.length){ toast('That file has no sheets in it.', true); return; }
+      var sheets = wb.SheetNames.map(function(name){ return readSheet(wb.Sheets[name], name); })
+                                .filter(function(s){ return s.grid.some(function(r){ return r.some(function(v){ return !isEmpty(v); }); }); });
+      if(!sheets.length){ toast('That file looks empty.', true); return; }
+      // use the first tab the tool recognises (falls back to the first tab with data)
+      var pick = sheets.filter(function(s){ return detectFormat(s.grid); })[0] || sheets[0];
+      var grid = pick.grid;
+      state.sheets = sheets; state.sheetName = pick.name;
       state.grid = grid; state.fileName = file.name; state.output = null; state.psCounts = {};
       $('psSameCount').value = '';   // page counts change week to week — never carry them over
       $('psPaste').value = ''; $('psFadminStatus').innerHTML = '';
       $('fileChipWrap').innerHTML = '<span class="filechip"><svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="var(--ok)"/><path d="m7.5 12.5 3 3 6-6.5" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'+
-        esc(file.name)+' <span class="meta">· '+grid.length+' rows</span></span>';
+        esc(file.name)+' <span class="meta">· '+(sheets.length > 1 ? 'tab “'+esc(pick.name)+'” · ' : '')+grid.length+' rows</span></span>';
       // auto-detect
       state.autoFormat = detectFormat(grid);
       if(state.autoFormat){
@@ -1175,8 +1311,14 @@ function handleFile(file){
       resetResult();
       updateRun();
       toast('Loaded '+file.name+'.');
-    }catch(err){ toast('Couldn’t read that file: '+err.message, true); }
+    }catch(err){
+      var m = /password|encrypt/i.test(err.message) ? 'That file is password-protected — open it in Excel, remove the password and save a copy.'
+            : 'Couldn’t read that file ('+err.message+'). Try opening it in Excel and saving it again as .xlsx.';
+      toast(m, true);
+    }
   };
+  reader.onerror = function(){ toast('Couldn’t open that file — it may be locked or still downloading.', true); };
+  if(!/\.(csv|xlsx|xlsm|xls)$/i.test(file.name)){ toast('That’s not a spreadsheet — drop a .csv, .xlsx or .xls file.', true); return; }
   reader.readAsArrayBuffer(file);
 }
 
@@ -1292,7 +1434,7 @@ function tableHtml(rows, headerRow, maxRows, maxCols){
   var html = '<table><thead><tr>';
   var width = Math.min(maxCols, Math.max.apply(null, rows.map(function(r){ return r.length; })));
   var body = rows;
-  if(headerRow && rows.length > 1){
+  if(headerRow && rows.length >= 1){
     body = rows.slice(1);
     for(var c=0;c<width;c++) html += '<th>'+esc(isEmpty(rows[0][c])?'':rows[0][c])+'</th>';
   } else {
@@ -1304,6 +1446,7 @@ function tableHtml(rows, headerRow, maxRows, maxCols){
     for(var c=0;c<width;c++){ var v = isEmpty(r[c])?'':String(r[c]); html += '<td title="'+esc(v)+'">'+esc(v)+'</td>'; }
     html += '</tr>';
   });
+  if(!body.length) html += '<tr><td colspan="'+Math.max(width,1)+'" style="color:var(--ink-faint);font-family:var(--sans)">No rows — nothing to put in this file.</td></tr>';
   html += '</tbody></table>';
   return html;
 }
