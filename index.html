@@ -721,10 +721,13 @@ function processTarget(grid, instrText){
 }
 
 // ---- FORMAT 4: PHARMASAVE ----
-/* Input: a "Zones | Stores | Page" grid (one row per zone, the zone's PDF in col C),
-   a label block, then "Pg N | link" rows. Output: a codesheet CSV with one
-   Page column per flyer page, plus a separate Pages/Links .xlsx. */
-var PS_LINK_RE = /^pg\.?\s*\d+/i;
+/* Input: a "Zones | Stores | <PDF>" grid (one row per zone), optionally a "Page count"
+   column, a label block, then link rows. The retailer has sent two link-row styles:
+     "Pg 2 | https://…"                      (Oct 2026)
+     "p. 2 | <creative>.pdf | https://…"     (Nov 2026)
+   Output: a codesheet CSV with one Page column per flyer page, plus a Pages/Links .xlsx. */
+var PS_LINK_RE = /^(?:pg|p|page)\.?\s*(\d+)\s*$/i;
+var PS_URL_RE  = /^https?:\/\//i;
 
 function psFindHeader(grid){
   return grid.findIndex(function(row){
@@ -736,30 +739,49 @@ function psFindHeader(grid){
 function parsePharmasave(grid){
   var h = psFindHeader(grid);
   if(h === -1) throw new Error('Couldn’t find a header row with "Zones" and "Stores" — is this a Pharmasave digital schematic?');
+  var head = grid[h].map(function(c){ return isEmpty(c) ? '' : String(c).trim().toLowerCase(); });
+  var zCol = head.indexOf('zones'), sCol = head.indexOf('stores');
+  var cCol = head.findIndex(function(t){ return /page\s*count|#\s*of\s*pages|pages?\s*#/.test(t); });
+  var fCol = head.findIndex(function(t, i){ return i !== cCol && i !== zCol && i !== sCol && /file|page|pdf/.test(t); });
+  if(fCol === -1) fCol = sCol + 1;
+
   var zones = [], links = [], skipped = [];
   for(var i=h+1;i<grid.length;i++){
     var r = grid[i] || [];
-    var a = isEmpty(r[0]) ? '' : String(r[0]).trim();
-    var b = isEmpty(r[1]) ? '' : String(r[1]).trim();
-    var c = isEmpty(r[2]) ? '' : String(r[2]).trim();
-    if(!a) continue;                                   // label rows ("Digital Schematic …", dates) have no col A
-    if(PS_LINK_RE.test(a)){ links.push({ page:a, link:b, row:i+1 }); continue; }
-    if(b && c){
+    var cell = function(c){ return c < 0 || isEmpty(r[c]) ? '' : String(r[c]).trim(); };
+    var a = cell(zCol);
+    if(!a) continue;                                   // label rows ("Digital Schematic …", dates) have no zone cell
+
+    var lm = a.match(PS_LINK_RE);
+    if(lm){
+      // the link is whichever cell holds a URL; otherwise the last filled cell ("No Link needed")
+      var rest = [];
+      for(var c=zCol+1;c<r.length;c++) if(!isEmpty(r[c])) rest.push(String(r[c]).trim());
+      var url = rest.filter(function(v){ return PS_URL_RE.test(v); })[0];
+      links.push({ page:'Pg ' + (+lm[1]), num:+lm[1], label:a, link: url || rest[rest.length-1] || '', row:i+1 });
+      continue;
+    }
+
+    var b = cell(sCol), f = cell(fCol);
+    if(b && f && /^\d[\d,\s]*$/.test(b)){
       var stores = b.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
-      var pdf = /\.pdf$/i.test(c) ? c : c + '.pdf';
-      zones.push({ zone:a, stores:stores, pdf:pdf, base:pdf.replace(/\.pdf$/i,''), row:i+1, addedPdf:!/\.pdf$/i.test(c) });
+      var pdf = /\.pdf$/i.test(f) ? f : f + '.pdf';
+      var cnt = cell(cCol); cnt = /^\d+$/.test(cnt) && +cnt > 0 ? +cnt : null;
+      zones.push({ zone:a, stores:stores, pdf:pdf, base:pdf.replace(/\.pdf$/i,''), row:i+1, addedPdf:!/\.pdf$/i.test(f), sheetCount:cnt });
     } else {
-      skipped.push({ row:i+1, zone:a, missing: !b ? 'stores' : 'PDF name' });
+      skipped.push({ row:i+1, zone:a, missing: !b ? 'store list' : (!f ? 'PDF name' : 'store list (it isn’t a list of store numbers)') });
     }
   }
   if(!zones.length) throw new Error('No zone rows found under the Zones / Stores header.');
-  return { headerIdx:h, zones:zones, links:links, skipped:skipped };
+  return { headerIdx:h, zones:zones, links:links, skipped:skipped,
+           hasCountCol: cCol !== -1, allCounted: zones.every(function(z){ return z.sheetCount; }) };
 }
 
-// "DigitalSchematic26FD45REV 1 1.xlsx" → "DigitalSchematic26FD45REV" (drops the extension and browser copy suffixes)
+// "Digital+Schematic+26FM47 1.xlsx" → "DigitalSchematic26FM47" (drops extension, copy suffixes, spaces and +)
 function psBaseName(fileName){
   var b = String(fileName||'').replace(/\.(xlsx|xls|csv)$/i,'').trim();
   b = b.replace(/(\s*\(\d+\))+$/,'').replace(/(\s+\d+)+$/,'').trim();
+  b = b.replace(/[+\s]+/g,'');
   return b || 'Pharmasave';
 }
 
@@ -811,7 +833,7 @@ function processPharmasave(grid, counts){
   var seenPg = {};
   ps.links.forEach(function(l){
     linkRows.push([l.page, l.link]);
-    var num = parseInt(l.page.replace(/\D+/g,''), 10);
+    var num = l.num;
     if(seenPg[num]) warns.push('<b>'+esc(l.page)+'</b> appears more than once in the links.');
     seenPg[num] = true;
     if(!l.link) warns.push('<b>'+esc(l.page)+'</b> has no link (row '+l.row+').');
@@ -1080,6 +1102,27 @@ function psApplyFadmin(){
   resetResult(); updateRun();
 }
 
+/* Newer schematics carry a "Page count" column — use it as the starting value. */
+function psApplySheetCounts(){
+  if(!state.ps) return;
+  var zs = state.ps.zones.filter(function(z){ return z.sheetCount; });
+  if(!zs.length) return;
+  var vals = zs.map(function(z){ return z.sheetCount; });
+  var same = zs.length === state.ps.zones.length && vals.every(function(v){ return v === vals[0]; });
+  if(same){
+    document.querySelector('input[name="psMode"][value="same"]').checked = true;
+    $('psSameCount').value = vals[0];
+  } else {
+    document.querySelector('input[name="psMode"][value="zone"]').checked = true;
+    zs.forEach(function(z){ state.psCounts[z.zone] = String(z.sheetCount); });
+  }
+  renderPsPanel();
+  $('psFadminStatus').innerHTML = '<div class="status s-ok"><span class="ok">✓</span><div>Page counts taken from the sheet’s <b>Page count</b> column — '+
+    zs.map(function(z){ return '<b>'+esc(z.zone)+'</b> '+z.sheetCount; }).join(' · ')+
+    (zs.length < state.ps.zones.length ? '. Enter the rest by hand' : '')+'. You can still paste from fadmin to double-check.</div></div>';
+  resetResult(); updateRun();
+}
+
 $('psPaste').addEventListener('input', psApplyFadmin);
 $('psPasteBtn').addEventListener('click', function(){
   if(!navigator.clipboard || !navigator.clipboard.readText){
@@ -1124,6 +1167,7 @@ function handleFile(file){
       state.autoFormat = detectFormat(grid);
       if(state.autoFormat){
         selectFormat(state.autoFormat, true);
+        if(state.autoFormat === 'pharmasave') psApplySheetCounts();
       } else {
         selectFormat(null, false);
         $('detectNote').innerHTML = '<span class="bad">Couldn’t auto-detect the retailer</span> — choose one from the dropdown before running.';
