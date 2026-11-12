@@ -247,7 +247,7 @@
     <div id="targetPanel" class="subpanel" style="display:none">
       <div class="sublabel">Page adjustments</div>
       <div class="notes" style="margin-bottom:10px">Paste the retailer’s notes exactly as you received them, one per line.</div>
-      <textarea id="targetInstr" spellcheck="false" placeholder="* There is images/copy changes for page 20 will notify when this page is ready.&#10;* Pages 6 &amp; 7 will not have HI market&#10;* Letter page B (Baby) follows page 29.&#10;* Letter page E (BTC) follows page 13.&#10;* Letter page F (Stat) follows page H.&#10;* Letter page G (Stat) follows page F.&#10;* Letter page H (BTS/C) follows 11.&#10;* Letter page J (Sprt) follows page 2"></textarea>
+      <textarea id="targetInstr" spellcheck="false" placeholder="* Remove page 3&#10;* There is images/copy changes for page 20 will notify when this page is ready.&#10;* Pages 6 &amp; 7 will not have HI market&#10;* Letter page B (Baby) follows page 29.&#10;* Letter page E (BTC) follows page 13.&#10;* Letter page F (Stat) follows page H.&#10;* Letter page G (Stat) follows page F.&#10;* Letter page H (BTS/C) follows 11.&#10;* Letter page J (Sprt) follows page 2"></textarea>
       <div class="notes" id="instrParse" style="margin-top:10px"></div>
     </div>
 
@@ -335,7 +335,7 @@ var state = { grid:null, fileName:'', format:null, autoFormat:null, output:null,
               links:null, linksName:'', ps:null, psCounts:{} };
 
 function $(id){ return document.getElementById(id); }
-function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function toast(msg, isErr){
   Array.prototype.forEach.call(document.querySelectorAll('.toast'), function(o){ o.remove(); });
   var t=document.createElement('div'); t.className='toast'+(isErr?' err':''); t.textContent=msg;
@@ -357,7 +357,7 @@ function processVallarta(grid){
   if(headerIdx === -1) throw new Error('Couldn’t find a header row containing "Versions" — is this a Vallarta codesheet?');
   notes.push('Header row found at sheet row <b>'+(headerIdx+1)+'</b>.');
 
-  var width = Math.max.apply(null, grid.map(function(r){ return r.length; }));
+  var width = gridWidth(grid);
   var headers = [];
   for(var c=0;c<width;c++) headers.push(isEmpty(grid[headerIdx][c]) ? '' : String(grid[headerIdx][c]).trim());
 
@@ -380,6 +380,7 @@ function processVallarta(grid){
   // drop rows where Versions is empty
   var vCol = headers.findIndex(function(h){ return h === 'Versions'; });
   if(vCol === -1) vCol = headers.findIndex(function(h){ return h.indexOf('Versions') !== -1; });
+  if(vCol === -1) throw new Error('The "Versions" column has no values under it — check the header row.');
   var before = data.length;
   data = data.filter(function(r){ return !isEmpty(r[vCol]); });
   if(before - data.length) notes.push('Removed <b>'+(before-data.length)+'</b> row(s) with no Versions value.');
@@ -403,11 +404,12 @@ function processVallarta(grid){
   var pdfCount = 0;
   data.forEach(function(r){
     pageCols.forEach(function(c){
-      if(!isEmpty(r[c])){ r[c] = String(r[c]).trim() + '.pdf'; pdfCount++; }
+      if(!isEmpty(r[c])){ var v = String(r[c]).trim(); if(!/\.pdf$/i.test(v)){ r[c] = v + '.pdf'; pdfCount++; } else r[c] = v; }
     });
   });
   notes.push('Appended <b>.pdf</b> to '+pdfCount+' file name(s) across '+pageCols.length+' Page column(s).');
 
+  if(!data.length) throw new Error('No version rows found under the header row.');
   return { rows:[headers].concat(data), notes:notes, outName:'vallarta_processed_output.csv',
            summary: data.length+' version rows · '+headers.length+' columns' };
 }
@@ -425,6 +427,11 @@ function processSprouts(grid){
     if(v instanceof Date){
       grid[2][1] = fmtMDY(v.getFullYear(), v.getMonth()+1, v.getDate());
       notes.push('Reformatted <b>AdDate</b> to '+grid[2][1]+'.');
+    } else if(/^\s*\d{1,2}\/\d{1,2}\/\d{2,4}\s*$/.test(String(v))){
+      var q = String(v).trim().split('/'), yy = +q[2];
+      if(yy < 100) yy += 2000;
+      var nv = fmtMDY(yy, +q[0], +q[1]);
+      if(nv !== String(v).trim()){ grid[2][1] = nv; notes.push('Reformatted <b>AdDate</b> to '+nv+'.'); }
     } else if(String(v).indexOf('-') !== -1){
       var p = String(v).trim().split(/[T ]/)[0].split('-');
       if(p.length===3 && !isNaN(+p[0]) && !isNaN(+p[1]) && !isNaN(+p[2])){
@@ -454,7 +461,7 @@ function processSprouts(grid){
   grid = kept;
 
   // 4. drop columns completely empty in the data section (rows after the header)
-  var width = Math.max.apply(null, grid.map(function(r){ return r.length; }));
+  var width = gridWidth(grid);
   var dataSection = grid.slice(headerIdx+1);
   var keep = [];
   for(var c=0;c<width;c++){
@@ -471,105 +478,259 @@ function processSprouts(grid){
 }
 
 // ---- FORMAT 3: TARGET USA ----
-/* Reads the retailer's plain-text page adjustments and turns them into three
-   kinds of instruction: pulled pages, market exclusions, letter-page placements. */
+/* Reads the retailer's plain-text page adjustments. Each line (or sentence / ";" clause)
+   becomes one of:
+     pull     drop a page entirely             "remove page 3", "pages 4-6 pulled", "pg 20 will notify when ready"
+     restore  cancel an earlier pull           "keep page 3", "page 3 is back in", "do not remove page 3"
+     mkt      drop market(s) from page(s)      "Pages 6 & 7 will not have HI market", "remove HI from pg 6"
+     only     page(s) run only in market(s)    "Page 12 HI only"
+     place    put a letter page in the order   "Letter page B follows page 29", "page J goes before 3"
+   Anything else is reported back as not understood — it is never guessed at. */
+var T_MAX_PAGE = 999;
+var T_ITEM     = '(?:\\d{1,3}(?!\\d)|[a-z]\\d?(?![a-z0-9]))';
+var T_SEP      = '(?:\\s*(?:,\\s*(?:and\\b|&)?|&|\\band\\b|\\bor\\b|\\/|\\+|[-–—]|\\bto\\b|\\bthrough\\b|\\bthru\\b)\\s*|\\s+(?=\\d))';
+var T_PAGEWORD_CORE = '\\b(?:pages?|pgs?\\.?|pp?\\.)';
+var T_PAGEWORD = T_PAGEWORD_CORE + '\\s*[:#]?\\s*';
+var T_PULL_VERB = /\b(?:remov(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|drop(?:s|ped|ping)?|pull(?:s|ed|ing)?|omit(?:s|ted|ting)?|exclud(?:e|es|ed|ing)|skip(?:s|ped|ping)?|cut|kill(?:s|ed)?|cancel(?:s|led|ed|ling|ing)?|scrap(?:s|ped)?|eliminat(?:e|es|ed|ing)|strike|take\s+out|taken\s+out|leave\s+out|left\s+out|get\s+rid\s+of)\b/i;
+var T_HOLD = /notif|page\s+is\s+ready|not\s+(?:yet\s+)?ready|on\s+hold|\bhold(?:ing)?\b|\bpending\b|\btbd\b|\bto\s+come\b|waiting\s+(?:on|for)|\b(?:will|to)\s+follow\b|coming\s+(?:later|soon)|\bnot\s+(?:be\s+)?(?:running|included|needed|required|used)\b|\b(?:won'?t|will\s+not)\s+(?:run|be\s+(?:running|included|used))\b|\bdo(?:es)?\s*n[o']?t\s+(?:include|run|use)\b|\bno\s+longer\b|\b(?:is|are)\s+(?:out|gone)\b|\bn\/a\b/i;
+var T_RESTORE = /\b(?:keep|kept|retain(?:ed)?|reinstat(?:e|es|ed)|restor(?:e|es|ed)|put\s+back|add(?:ed)?\s+back|bring\s+back|un-?pull(?:ed)?|(?:is|are)\s+back(?:\s+in)?|no\s+longer\s+(?:pulled|removed|on\s+hold|pending))\b/i;
+var T_NEGATED  = /(?:\bnot|n't|\bnever|\bno\s+need\s+to)\s+(?:\w+\s+){0,2}$/i;
+var T_MKT_EXCL = /\b(?:will\s+not\s+have|won'?t\s+have|will\s+have\s+no|do(?:es)?\s*n[o']?t\s+have|not\s+have|have\s+no|without|exclud(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|drop(?:s|ped)?|pull(?:s|ed)?|omit(?:s|ted)?|skip(?:s|ped)?|take\s+out|leave\s+out|except|minus|no|not\s+(?:in|for|running\s+in))\b/i;
+var T_MKT_CUE_BEFORE = /(?:have|no|without|exclud\w*|remov\w*|delet\w*|drop\w*|pull\w*|omit\w*|skip\w*|except|minus|only|from|not\s+in|not\s+for)\s+(?:the\s+)?$/i;
+var T_NOOP    = /^(?:no\s+(?:changes?|adjustments?|updates?|page\s+changes?)|none|n\/a|nothing(?:\s+to\s+change)?|as\s+is|all\s+good)[.!]*$/i;
+var T_CHATTER = /^(?:hi|hello|hey|good\s+(?:morning|afternoon)|thanks?|thank\s+you|regards|best|cheers|please\s+(?:see|note)\s+below)\b[^0-9]{0,40}$/i;
+
+function reEsc(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function gridWidth(rows){ return (rows||[]).reduce(function(w, r){ return Math.max(w, (r||[]).length); }, 0); }
+
+function tFindHeader(grid){
+  for(var i=0;i<grid.length;i++){
+    var joined = (grid[i]||[]).map(function(c){ return isEmpty(c)?'':String(c).trim(); }).join('|').toLowerCase();
+    if(joined.indexOf('pg number') !== -1 && joined.indexOf('pdf') !== -1) return i;
+  }
+  return -1;
+}
+
+// "3, 6 & 30" / "4-6" / "1, 19, 25, J and K" → { nums:[…], lets:[…] }; ranges are expanded
+function tExpandList(s){
+  var t = String(s).replace(/\b(?:through|thru|to)\b|[-–—]/gi, ' ~ ').replace(/\b(?:and|or)\b|[,&\/+:#]/gi, ' ');
+  var toks = t.match(/\d+|[A-Za-z]\d?|~/g) || [], nums = [], lets = [];
+  function addN(n){ if(n >= 1 && n <= T_MAX_PAGE && nums.indexOf(n) === -1) nums.push(n); }
+  for(var i=0;i<toks.length;i++){
+    var k = toks[i];
+    if(k === '~') continue;
+    if(/^\d+$/.test(k)){
+      var n = parseInt(k,10);
+      if(toks[i+1] === '~' && /^\d+$/.test(toks[i+2]||'')){
+        var e = parseInt(toks[i+2],10);
+        if(e > n && e - n <= 100){ for(var x=n;x<=e;x++) addN(x); i += 2; continue; }
+      }
+      addN(n);
+    } else {
+      if(i > 0 && /^[ai]$/.test(k)) continue;   // "page 5 & a few changes" — English, not page A
+      var U = k.toUpperCase(); if(lets.indexOf(U) === -1) lets.push(U);
+    }
+  }
+  return { nums:nums, lets:lets };
+}
+
+// every "page …" list in a clause, plus a bare list straight after a pull verb ("remove 3, 6 & 30")
+function tPageRefs(line, allowBare){
+  var verbMatch = allowBare ? line.match(T_PULL_VERB) : null;
+  var re = new RegExp(T_PAGEWORD + '(' + T_ITEM + '(?:' + T_SEP + T_ITEM + ')*)', 'gi'), m, nums = [], lets = [];
+  while((m = re.exec(line)) !== null){
+    var r = tExpandList(m[1]);
+    r.nums.forEach(function(n){ if(nums.indexOf(n) === -1) nums.push(n); });
+    r.lets.forEach(function(l){ if(lets.indexOf(l) === -1) lets.push(l); });
+  }
+  if(!nums.length && !lets.length && verbMatch){
+    var rest = line.slice(verbMatch.index + verbMatch[0].length);
+    var b = rest.match(new RegExp('^\\s*[:\\-–]?\\s*(?:the\\s+)?(\\d{1,3}(?:' + T_SEP + '\\d{1,3})*)(?!\\d)', 'i'));
+    if(b) nums = tExpandList(b[1]).nums;
+  }
+  return { nums:nums, lets:lets, any: nums.length + lets.length > 0 };
+}
+
+// market columns named in a clause. With a file loaded only real column names count, and a
+// name must look deliberate: written in capitals ("HI"), followed by "market", or right after a cue ("no hi").
+function tMarketHits(line, markets){
+  var hits = [], seen = {};
+  function add(n){ var k = String(n).toUpperCase(); if(!seen[k]){ seen[k] = true; hits.push(n); } }
+  if(!markets || !markets.length){
+    var m, re = /\b([A-Za-z0-9]{2,6})\s+markets?\b/gi;
+    while((m = re.exec(line)) !== null) if(!/^(?:all|the|every|each|other|these|those|this)$/i.test(m[1])) add(m[1].toUpperCase());
+    var re2 = /\b(?:have|no|without|exclud\w*|remov\w*|except|minus|from)\s+(?:the\s+)?([A-Z][A-Z0-9]{1,5})\b/g;
+    while((m = re2.exec(line)) !== null) add(m[1]);
+    return hits;
+  }
+  var allCaps = line === line.toUpperCase();
+  markets.forEach(function(mk){
+    var name = String(mk||'').trim();
+    if(name.length < 2) return;   // single letters collide with letter pages
+    var re = new RegExp('(^|[^A-Za-z0-9])(' + reEsc(name) + ')(?![A-Za-z0-9])(\\s+markets?\\b)?', 'gi'), m;
+    while((m = re.exec(line)) !== null){
+      var tok = m[2], before = line.slice(0, m.index + m[1].length);
+      if(m[3] || (!allCaps && tok === tok.toUpperCase() && /[A-Z]/.test(tok)) || T_MKT_CUE_BEFORE.test(before)){ add(name); break; }
+    }
+  });
+  return hits;
+}
+
+// split pasted notes into clauses: lines, ";" and sentence ends (but not "pg. 5" / "p. J")
+function tClauses(text){
+  var out = [];
+  String(text||'').split(/\r?\n/).forEach(function(raw, li){
+    var s = raw.replace(/([.!?])\s+(?=[A-Z*•])/g, function(all, p, off, str){
+      var prev = str.slice(0, off).match(/([A-Za-z]+)$/);
+      return (prev && /^(?:p|pg|pgs|pp|no|vs|approx|st|ltr)$/i.test(prev[1])) ? all : p + '\n';
+    });
+    s.split(/\n|;/).forEach(function(c){
+      var line = c.replace(/^[\s*•·\-–—>]+/, '').replace(/^\(?\d{1,2}[.)]\s+/, '').replace(/^\[\s*[x ]?\s*\]\s*/i, '').trim();
+      if(line) out.push({ text:line, lineNo:li+1 });
+    });
+  });
+  return out;
+}
+
 function parseTargetInstructions(text, marketCols){
-  var out = { pull:[], pullLetters:[], noMarket:[], follows:[], parsed:[], unparsed:[] };
-  var mkSet = {}, strict = !!(marketCols && marketCols.length);
-  (marketCols||[]).forEach(function(m){ if(m) mkSet[String(m).toUpperCase()] = true; });
+  var out = { pull:[], pullLetters:[], noMarket:[], onlyMarket:[], follows:[], parsed:[], unparsed:[], problems:[] };
+  var markets = (marketCols||[]).map(function(m){ return String(m||'').trim(); }).filter(Boolean);
+  var pullOrder = [];   // applied in order so a later "keep page 3" undoes an earlier "remove page 3" and vice versa
+  function tokList(r){ return r.nums.map(String).concat(r.lets); }
 
-  String(text||'').split(/\r?\n/).forEach(function(raw){
-    var line = raw.replace(/^[\s*•·\-–]+/,'').trim();
-    if(!line) return;
-    var low = line.toLowerCase();
+  tClauses(text).forEach(function(cl){
+    var line = cl.text.replace(/[.\s]+$/, '');
+    var clean = line.replace(/\bkeep\s+(?:you|u|everyone|all)\s+(?:posted|updated|informed)\b/gi, ' ');
+    if(T_NOOP.test(line)){ out.parsed.push({ kind:'info', text:'No changes' }); return; }
+    if(T_CHATTER.test(line) || (/:$/.test(line) && !/\d/.test(line))) return;   // greetings, sign-offs, "Page adjustments:" headings
 
-    // 1) letter page placement — "Letter page B (Baby) follows page 29." / "follows page H." / "follows 11."
-    var m = low.match(/letter\s*page\s*([a-z]\d?)\b[\s\S]*?follow(?:s|ing)?\s*(?:after\s*)?(?:page\s*)?([0-9]+|[a-z]\d?)\b/);
-    if(m){
-      var L = m[1].toUpperCase(), A = m[2].toUpperCase();
-      out.follows.push({ letter:L, after:A });
-      out.parsed.push({ kind:'place', text:'Letter page '+L+' → after '+A });
+    var pullVerb = clean.match(T_PULL_VERB);
+    var negated  = pullVerb && T_NEGATED.test(clean.slice(0, pullVerb.index));
+    var wantsPull = (pullVerb && !negated) || T_HOLD.test(clean);
+
+    // 1) letter-page placement — "Letter page B (Baby) follows page 29", "page J goes before pg 3", "Letter H follows 11"
+    var pm = clean.match(new RegExp('(?:\\bletter\\s*(?:pages?|pgs?\\.?)?|' + T_PAGEWORD_CORE + ')\\s*#?\\s*([a-z]\\d?)(?![a-z0-9])[\\s\\S]*?' +
+             '\\b(follows?(?!\\s+by)|following|after|before|ahead\\s+of|in\\s+front\\s+of|precedes?|preceding)\\s*' +
+             '(?:the\\s+)?(?:(?:letter\\s*)?(?:pages?|pgs?\\.?|pp?\\.)?\\s*#?\\s*)(\\d{1,3}|[a-z]\\d?)(?![a-z0-9])', 'i'));
+    var fb = !pm && clean.match(/\b(?:pages?|pgs?\.?)?\s*(\d{1,3}|[a-z]\d?)(?![a-z0-9])\s+(?:is\s+)?followed\s+by\s+(?:letter\s*)?(?:pages?|pgs?\.?)?\s*([a-z]\d?)(?![a-z0-9])/i);
+    if(pm || fb){
+      var L = (pm ? pm[1] : fb[2]).toUpperCase(), A = String(pm ? pm[3] : fb[1]).toUpperCase().replace(/^0+(?=\d)/, '');
+      var mode = (!pm || /follow|after/i.test(pm[2])) ? 'after' : 'before';
+      if(wantsPull){   // "Letter page B follows page 29 — waiting on images" → B is on hold
+        pullOrder.push({ op:'pull', toks:[L] });
+        out.parsed.push({ kind:'pull', text:'Pull pg '+L });
+        return;
+      }
+      if(L === A){ out.problems.push('“'+esc(line)+'” places letter page <b>'+L+'</b> relative to itself — ignored.'); return; }
+      var prev = out.follows.filter(function(f){ return f.letter === L; })[0];
+      if(prev){
+        out.problems.push('Letter page <b>'+L+'</b> has more than one placement instruction — used the last one (“'+esc(line)+'”).');
+        out.follows.splice(out.follows.indexOf(prev), 1);
+      }
+      out.follows.push({ letter:L, after:A, mode:mode });
+      out.parsed.push({ kind:'place', text:'Letter page '+L+' → '+mode+' '+A });
       return;
     }
 
-    // 2) market exclusion — "Pages 6 & 7 will not have HI market"
-    var m2 = low.match(/pages?\s*((?:\d+\s*(?:&|and|,|\/|\+)?\s*)+?)\s*(?:will\s+not\s+have|won'?t\s+have|will\s+have\s+no|do(?:es)?\s+not\s+have|without|excludes?|excluded|no)\s+([a-z0-9]+)\s*(?:market)?/);
-    if(m2){
-      var mk = m2[2].toUpperCase();
-      if(!strict || mkSet[mk]){
-        var pgs = (m2[1].match(/\d+/g)||[]).map(Number);
-        if(pgs.length){
-          out.noMarket.push({ pages:pgs, market:mk });
-          out.parsed.push({ kind:'mkt', text:'No '+mk+' on pg '+pgs.join(', ') });
-          return;
-        }
-      }
-    }
-
-    // 3) pulled page — "…waiting on images for page 1, 19, 25, J, K, will notify"
-    if(/notif|page is ready|not\s+ready|on\s+hold|pending|tbd|to\s+come|hold\s+for|waiting\s+on/.test(low)){
-      // an item is a number or a lone letter; the list may mix them and is comma/&/and separated
-      var ITEM = '(?:\\d+|[a-z](?![a-z0-9]))';
-      var SEP  = '(?:\\s*(?:,|&|and|\\/|\\+|-|to|\\s)\\s*)';
-      var re = new RegExp('pages?\\s*(' + ITEM + '(?:' + SEP + ITEM + ')*)', 'g');
-      var nums = [], lets = [], m3;
-      while((m3 = re.exec(low)) !== null){
-        // blank out separator words first, or "4 and 5" tokenises as 4, A, N, D, 5
-        var cleaned = m3[1].replace(/\b(?:and|to)\b/g, ',');
-        (cleaned.match(/\d+|[a-z](?![a-z0-9])/g) || []).forEach(function(tok){
-          if(/^\d+$/.test(tok)){ if(nums.indexOf(+tok) === -1) nums.push(+tok); }
-          else { var U = tok.toUpperCase(); if(lets.indexOf(U) === -1) lets.push(U); }
+    // 2) market changes — needs a market name, a page reference and a cue
+    var mline = clean.replace(/\b(?:from|in|for|across|on)?\s*(?:all|every)\s+(?:the\s+)?markets?\b/gi, ' ');
+    var mhits = tMarketHits(mline, markets);
+    var refs  = tPageRefs(mline, !!pullVerb);
+    if(mhits.length && (T_MKT_EXCL.test(mline) || /\bonly\b/i.test(mline))){
+      if(!refs.any){ out.problems.push('“'+esc(line)+'” names market '+mhits.map(esc).join(', ')+' but no page number — ignored.'); return; }
+      if(/\bonly\b/i.test(mline)){
+        out.onlyMarket.push({ pages:refs.nums, letters:refs.lets, markets:mhits });
+        out.parsed.push({ kind:'mkt', text:'Only '+mhits.join('/')+' on pg '+tokList(refs).join(', ') });
+      } else {
+        mhits.forEach(function(mk){
+          out.noMarket.push({ pages:refs.nums, letters:refs.lets, market:mk });
+          out.parsed.push({ kind:'mkt', text:'No '+mk+' on pg '+tokList(refs).join(', ') });
         });
       }
-      if(nums.length || lets.length){
-        out.pull = out.pull.concat(nums);
-        out.pullLetters = out.pullLetters.concat(lets);
-        out.parsed.push({ kind:'pull', text:'Pull pg ' + nums.concat(lets).join(', ') });
+      return;
+    }
+    // looks like a market change but the market isn't a column — don't fall through and pull the whole page
+    var unknownMk = mline.match(/\b([A-Za-z0-9]{2,6})\s+markets?\b/i);
+    if(refs.any && ((unknownMk && !/^(?:all|the|every|each|other|these|those|this)$/i.test(unknownMk[1])) ||
+                    /\b(?:will\s+not\s+have|won'?t\s+have|will\s+have\s+no|do(?:es)?\s*n[o']?t\s+have|not\s+have)\b/i.test(mline))){
+      out.problems.push('“'+esc(line)+'” looks like a market change, but '+(unknownMk ? '<b>'+esc(unknownMk[1].toUpperCase())+'</b> isn’t a market column in this file' : 'no market column in this file is named')+' — ignored. Check the market code.');
+      return;
+    }
+
+    // 3) restore — "keep page 3", "page 3 is back in", "do not remove page 3"
+    if(refs.any && (T_RESTORE.test(clean) || (pullVerb && negated && !T_HOLD.test(clean)))){
+      pullOrder.push({ op:'restore', toks:tokList(refs) });
+      out.parsed.push({ kind:'info', text:'Keep pg '+tokList(refs).join(', ') });
+      return;
+    }
+
+    // 4) pull — "remove page 3", "pages 4-6 pulled", "waiting on images for page 1, 19, J, will notify"
+    if(wantsPull){
+      if(refs.any){
+        pullOrder.push({ op:'pull', toks:tokList(refs) });
+        out.parsed.push({ kind:'pull', text:'Pull pg '+tokList(refs).join(', ') });
         return;
       }
+      out.problems.push('“'+esc(line)+'” sounds like a page should be pulled, but there’s no page number in it — ignored.');
+      return;
     }
 
     out.unparsed.push(line);
   });
+
+  var pulled = [];
+  pullOrder.forEach(function(o){
+    o.toks.forEach(function(t){
+      var at = pulled.indexOf(t);
+      if(o.op === 'pull' && at === -1) pulled.push(t);
+      if(o.op === 'restore' && at !== -1) pulled.splice(at, 1);
+    });
+  });
+  pulled.forEach(function(t){ if(/^\d+$/.test(t)) out.pull.push(+t); else out.pullLetters.push(t); });
   return out;
+}
+
+// a cell from the PG Number column → 7 / "B"; null when there's nothing usable
+function tPageToken(v){
+  if(isEmpty(v)) return null;
+  var s = String(v).trim().toUpperCase().replace(/^(?:PAGE|PGS?|P\.)\s*#?\s*(?=\S)/, '');
+  var m;
+  if(/^\d+(?:\.0+)?$/.test(s)){ var n = parseInt(s, 10); return n >= 1 ? n : null; }
+  if((m = s.match(/^([A-Z]{1,3}\d?)\s*(?:\(.*\))?$/))) return m[1];
+  return s || null;
 }
 
 function processTarget(grid, instrText){
   var notes = [], warns = [];
 
-  // locate the header row (has both "PDF" and "PG Number")
-  var headerIdx = -1;
-  for(var i=0;i<grid.length;i++){
-    var joined = grid[i].map(function(c){ return isEmpty(c)?'':String(c).trim(); }).join('|').toLowerCase();
-    if(joined.indexOf('pg number') !== -1 && joined.indexOf('pdf') !== -1){ headerIdx = i; break; }
-  }
+  var headerIdx = tFindHeader(grid);
   if(headerIdx === -1) throw new Error('Couldn’t find a header row containing "PDF" and "PG Number" — is this a Target USA codesheet?');
   notes.push('Header row found at sheet row <b>'+(headerIdx+1)+'</b>.');
 
-  var width = Math.max.apply(null, grid.map(function(r){ return r.length; }));
+  var width = gridWidth(grid);
   var header = [];
   for(var c=0;c<width;c++) header.push(isEmpty(grid[headerIdx][c]) ? '' : String(grid[headerIdx][c]).trim());
 
   // metadata above the header: keep the per-market page-count row for validation
   var checksum = null, flyerDate = null;
   for(var i=0;i<headerIdx;i++){
-    var r = grid[i];
+    var r = grid[i] || [];
     if(isEmpty(r[0])) continue;
     var a0 = String(r[0]).trim();
     if(/^\d{8}$/.test(a0) && !flyerDate) flyerDate = a0;
     if(/^\d+$/.test(a0)){
       var hasCounts = false;
-      for(var c=2;c<Math.min(width,14);c++) if(!isEmpty(r[c]) && /^\d+$/.test(String(r[c]).trim())) hasCounts = true;
+      for(var c=2;c<width;c++) if(!isEmpty(r[c]) && /^\d+$/.test(String(r[c]).trim())) hasCounts = true;
       if(hasCounts) checksum = r;
     }
   }
 
-  // data rows
-  var data = [];
+  // data rows (remember sheet row numbers so problems can point at them)
+  var data = [], rowNo = [];
   for(var i=headerIdx+1;i<grid.length;i++){
-    var r = grid[i], row = [];
+    var r = grid[i] || [], row = [];
     for(var c=0;c<width;c++) row.push(r[c]===undefined?null:r[c]);
-    if(row.some(function(v){ return !isEmpty(v); })) data.push(row);
+    if(row.some(function(v){ return !isEmpty(v); })){ data.push(row); rowNo.push(i+1); }
   }
   if(!data.length) throw new Error('No data rows found below the header row.');
 
@@ -581,61 +742,118 @@ function processTarget(grid, instrText){
   var headerOut = keep.map(function(c){ return header[c]; });
   data = data.map(function(r){ return keep.map(function(c){ return r[c]===undefined?null:r[c]; }); });
   var marketCols = headerOut.slice(2);
+  var mkIndex = {}, dupMk = [];
+  marketCols.forEach(function(m, i){
+    var k = String(m||'').trim().toUpperCase();
+    if(!k) return;
+    if(mkIndex[k] !== undefined){ if(dupMk.indexOf(k) === -1) dupMk.push(k); return; }
+    mkIndex[k] = i + 2;
+  });
+  if(dupMk.length) warns.push('Market column(s) <b>'+dupMk.map(esc).join(', ')+'</b> appear more than once in the header — market changes only touch the first one.');
+  var blankMk = marketCols.filter(function(m){ return isEmpty(m); }).length;
+  if(blankMk) warns.push('<b>'+blankMk+'</b> market column(s) with marks have no name in the header row.');
 
+  var hasInstr = !isEmpty(instrText);
   var ins = parseTargetInstructions(instrText, marketCols);
-  if(!ins.parsed.length) warns.push('No page adjustments were recognised — the output is a straight clean-up with no pulls, market changes or letter pages placed.');
+  if(!hasInstr) notes.push('No page adjustments entered — this is a straight clean-up.');
+  else if(!ins.parsed.length) warns.push('None of the page adjustments were understood — the output has no pulls, market changes or letter pages placed.');
+  ins.problems.forEach(function(p){ warns.push(p); });
   ins.unparsed.forEach(function(l){ warns.push('Couldn’t interpret this line, so it was ignored: “'+esc(l)+'”'); });
 
-  // normalise PDF filename + page token
-  var addedPdf = 0;
-  data.forEach(function(r){
-    var nm = String(r[0]).trim();
+  // normalise PDF filename + page token; rows missing either are reported, never invented
+  var addedPdf = 0, badRows = [], dupKeys = {}, dups = [];
+  data = data.filter(function(r, i){
+    var nm = isEmpty(r[0]) ? '' : String(r[0]).trim();
+    var tk = tPageToken(r[1]);
+    if(!nm || tk === null){ badRows.push(rowNo[i] + (nm ? ' ('+esc(nm)+')' : '')); return false; }
     if(!/\.pdf$/i.test(nm)){ nm += '.pdf'; addedPdf++; }
-    r[0] = nm;
-    var t = String(r[1]).trim().toUpperCase();
-    r[1] = /^\d+$/.test(t) ? parseInt(t,10) : t;
+    r[0] = nm; r[1] = tk;
+    var key = nm.toLowerCase()+'|'+tk;
+    if(dupKeys[key] && dups.indexOf(nm) === -1) dups.push(nm);
+    dupKeys[key] = true;
+    return true;
   });
   if(addedPdf) notes.push('Appended <b>.pdf</b> to <b>'+addedPdf+'</b> filename(s) that were missing it.');
+  if(badRows.length) warns.push('Left out <b>'+badRows.length+'</b> row(s) with no PDF name or no usable page number (sheet row '+badRows.slice(0,10).join(', ')+(badRows.length>10?' …':'')+').');
+  if(dups.length) warns.push('Same PDF listed twice on the same page: <b>'+dups.slice(0,8).map(esc).join(', ')+'</b>'+(dups.length>8?' …':'')+'.');
+  if(!data.length) throw new Error('No rows have both a PDF name and a page number.');
+
+  function marksByMarket(rows){
+    var per = {}, grp = {};
+    rows.forEach(function(r){ var k = String(r[1]); (grp[k] = grp[k] || []).push(r); });
+    for(var col=2; col<headerOut.length; col++){
+      var n = 0;
+      Object.keys(grp).forEach(function(k){ if(grp[k].some(function(r){ return !isEmpty(r[col]); })) n++; });
+      per[col] = n;
+    }
+    return per;
+  }
+  var rawCount = marksByMarket(data);
+  var inFile = {}, origNums = [];
+  data.forEach(function(r){
+    var k = String(r[1]);
+    if(!inFile[k]){ inFile[k] = true; if(typeof r[1] === 'number') origNums.push(r[1]); }
+  });
+  origNums.sort(function(a,b){ return a-b; });
+  var adjusted = false;
 
   // 1) pulled pages — drop every instance (numeric pages and letter pages alike)
-  var pulledGroups = 0;
-  if(ins.pull.length || ins.pullLetters.length){
+  var pullKeys = ins.pull.map(String).concat(ins.pullLetters), pulledSet = {}, pulledGroups = 0;
+  if(pullKeys.length){
+    var found = pullKeys.filter(function(k){ return inFile[k]; }), missing = pullKeys.filter(function(k){ return !inFile[k]; });
+    found.forEach(function(k){ pulledSet[k] = true; });
     var before = data.length;
-    var seenTok = {}, gonTok = {};
-    data.forEach(function(r){ seenTok[String(r[1])] = true; });
-    data = data.filter(function(r){
-      var drop = (typeof r[1] === 'number')
-        ? ins.pull.indexOf(r[1]) !== -1
-        : ins.pullLetters.indexOf(String(r[1])) !== -1;
-      if(drop) gonTok[String(r[1])] = true;
-      return !drop;
-    });
-    pulledGroups = Object.keys(gonTok).length;
-    var gone = before - data.length;
-    var allPulled = ins.pull.concat(ins.pullLetters);
-    if(gone) notes.push('Pulled page(s) <b>'+allPulled.join(', ')+'</b> — removed <b>'+gone+'</b> row(s) across '+pulledGroups+' page(s).');
-    else warns.push('Nothing matched pulled page(s) <b>'+allPulled.join(', ')+'</b> — check the page reference.');
+    data = data.filter(function(r){ return !pulledSet[String(r[1])]; });
+    pulledGroups = found.length;
+    if(found.length){ adjusted = true; notes.push('Pulled page(s) <b>'+found.join(', ')+'</b> — removed <b>'+(before - data.length)+'</b> row(s).'); }
+    if(missing.length) warns.push('Page(s) <b>'+missing.join(', ')+'</b> were listed to pull but aren’t in the file — nothing removed for them. Check the page reference.');
+    if(!data.length) throw new Error('Every page was pulled — there’s nothing left to export. Check the page adjustments.');
   }
 
-  // 2) market exclusions
+  // 2) market changes
+  function targetsOf(rule){
+    var t = rule.pages.map(String).concat(rule.letters), live = [], gone = [], absent = [];
+    t.forEach(function(k){ if(pulledSet[k]) gone.push(k); else if(inFile[k]) live.push(k); else absent.push(k); });
+    return { live:live, gone:gone, absent:absent };
+  }
+  function dropEmptyRows(live){
+    var b = data.length;
+    data = data.filter(function(r){
+      if(live.indexOf(String(r[1])) === -1) return true;
+      for(var c=2;c<headerOut.length;c++) if(!isEmpty(r[c])) return true;
+      return false;
+    });
+    return b - data.length;
+  }
   ins.noMarket.forEach(function(rule){
-    var ci = headerOut.indexOf(rule.market);
-    if(ci === -1){ warns.push('“'+rule.market+'” isn’t a column in this file — that exclusion was skipped.'); return; }
+    var ci = mkIndex[String(rule.market).toUpperCase()];
+    if(ci === undefined){ warns.push('“'+esc(rule.market)+'” isn’t a market column in this file — that change was skipped.'); return; }
+    var tg = targetsOf(rule);
+    if(tg.absent.length) warns.push('Removing <b>'+esc(rule.market)+'</b> from page(s) <b>'+tg.absent.join(', ')+'</b>: those pages aren’t in the file.');
+    if(!tg.live.length) return;
+    var cleared = 0;
+    data.forEach(function(r){ if(tg.live.indexOf(String(r[1])) !== -1 && !isEmpty(r[ci])){ r[ci] = null; cleared++; } });
+    var emptied = dropEmptyRows(tg.live);
+    if(cleared){ adjusted = true; notes.push('Removed <b>'+esc(rule.market)+'</b> from page(s) <b>'+tg.live.join(', ')+'</b> — '+cleared+' mark(s) cleared'+(emptied?', '+emptied+' now-empty row(s) dropped':'')+'.'); }
+    else notes.push('<b>'+esc(rule.market)+'</b> was already absent from page(s) <b>'+tg.live.join(', ')+'</b> — nothing to change.');
+  });
+  ins.onlyMarket.forEach(function(rule){
+    var known = rule.markets.filter(function(m){ return mkIndex[String(m).toUpperCase()] !== undefined; });
+    var unknown = rule.markets.filter(function(m){ return known.indexOf(m) === -1; });
+    if(unknown.length) warns.push('“'+unknown.map(esc).join(', ')+'” isn’t a market column in this file.');
+    if(!known.length){ warns.push('The “only '+rule.markets.map(esc).join('/')+'” change was skipped.'); return; }
+    var keepCols = known.map(function(m){ return mkIndex[String(m).toUpperCase()]; });
+    var tg = targetsOf(rule);
+    if(tg.absent.length) warns.push('“Only '+known.map(esc).join('/')+'” on page(s) <b>'+tg.absent.join(', ')+'</b>: those pages aren’t in the file.');
+    if(!tg.live.length) return;
     var cleared = 0;
     data.forEach(function(r){
-      if(typeof r[1] === 'number' && rule.pages.indexOf(r[1]) !== -1 && !isEmpty(r[ci])){ r[ci] = null; cleared++; }
+      if(tg.live.indexOf(String(r[1])) === -1) return;
+      for(var c=2;c<headerOut.length;c++) if(keepCols.indexOf(c) === -1 && !isEmpty(r[c])){ r[c] = null; cleared++; }
     });
-    var beforeN = data.length;
-    data = data.filter(function(r){
-      if(typeof r[1] === 'number' && rule.pages.indexOf(r[1]) !== -1){
-        for(var c=2;c<headerOut.length;c++) if(!isEmpty(r[c])) return true;
-        return false;
-      }
-      return true;
-    });
-    var emptied = beforeN - data.length;
-    if(cleared || emptied) notes.push('Removed <b>'+rule.market+'</b> from page(s) <b>'+rule.pages.join(', ')+'</b> — '+cleared+' mark(s) cleared'+(emptied?', '+emptied+' now-empty row(s) dropped':'')+'.');
-    else notes.push('<b>'+rule.market+'</b> was already absent from page(s) <b>'+rule.pages.join(', ')+'</b> — nothing to change.');
+    var emptied = dropEmptyRows(tg.live);
+    if(cleared) adjusted = true;
+    notes.push('Page(s) <b>'+tg.live.join(', ')+'</b> now run only in <b>'+known.map(esc).join(', ')+'</b> — '+cleared+' other mark(s) cleared'+(emptied?', '+emptied+' now-empty row(s) dropped':'')+'.');
   });
 
   // 3) group by page, numeric pages in order, then slot in the letter pages
@@ -648,33 +866,67 @@ function processTarget(grid, instrText){
   var seq = seen.filter(function(k){ return typeof groups[k].token === 'number'; })
                 .sort(function(a,b){ return groups[a].token - groups[b].token; });
   var letterKeys = seen.filter(function(k){ return typeof groups[k].token !== 'number'; });
+  var followOf = {};
+  ins.follows.forEach(function(f){ followOf[f.letter] = f; });
+
+  // where an instruction really points once pulls are applied: a pulled page hands over to its neighbour
+  function resolveAnchor(a, mode, depth){
+    a = String(a);
+    if(groups[a]) return { key:a, mode:mode };
+    if(depth > 20) return null;
+    if(pulledSet[a]){
+      if(/^\d+$/.test(a)){
+        var n = +a, live = origNums.filter(function(x){ return groups[String(x)]; });
+        if(mode === 'after'){ var p = live.filter(function(x){ return x < n; }).pop(); return p != null ? { key:String(p), mode:'after', via:a } : { start:true, via:a }; }
+        var nx = live.filter(function(x){ return x > n; })[0]; return nx != null ? { key:String(nx), mode:'before', via:a } : { end:true, via:a };
+      }
+      var f = followOf[a];
+      if(f){ var r = resolveAnchor(f.after, f.mode, depth+1); if(r) r.via = a; return r; }
+      return { end:true, via:a };
+    }
+    return null;
+  }
 
   var queue = [];
   ins.follows.forEach(function(f){
     if(groups[f.letter]) queue.push(f);
-    else if(ins.pullLetters.indexOf(f.letter) !== -1)
-      notes.push('Letter page <b>'+f.letter+'</b> was pulled, so its placement instruction was skipped.');
+    else if(pulledSet[f.letter]) notes.push('Letter page <b>'+f.letter+'</b> was pulled, so its placement instruction was skipped.');
     else warns.push('Instruction mentions letter page <b>'+f.letter+'</b>, but there’s no such page in the file.');
   });
-  var placed = {}, guard = 0;
-  while(queue.length && guard++ < 80){
+  var placed = {}, placedAnchor = {};
+  function hangsOff(k, anchor){ var g = 0; while(placedAnchor[k] && g++ < 50){ if(placedAnchor[k] === anchor) return true; k = placedAnchor[k]; } return false; }
+  for(var pass=0; queue.length && pass < 80; pass++){
     var still = [];
     queue.forEach(function(f){
-      var at = seq.indexOf(String(f.after));
-      if(at !== -1){ seq.splice(at+1, 0, f.letter); placed[f.letter] = true; }
-      else still.push(f);
+      var r = resolveAnchor(f.after, f.mode, 0);
+      if(r && (r.start || r.end)){
+        if(r.start) seq.unshift(f.letter); else seq.push(f.letter);
+        placed[f.letter] = true;
+        notes.push('Letter page <b>'+f.letter+'</b> was meant to go '+f.mode+' page '+f.after+', which was pulled — put it at the '+(r.start?'start':'end')+'.');
+        return;
+      }
+      var at = r ? seq.indexOf(r.key) : -1;
+      if(at === -1){ still.push(f); return; }
+      var pos = at;
+      if(r.mode === 'after'){
+        pos = at + 1;
+        while(pos < seq.length && placedAnchor[seq[pos]] && hangsOff(seq[pos], r.key)) pos++;
+        placedAnchor[f.letter] = r.key;
+      }
+      seq.splice(pos, 0, f.letter); placed[f.letter] = true;
+      if(r.via) notes.push('Letter page <b>'+f.letter+'</b> was meant to go '+f.mode+' page '+f.after+', which was pulled — placed it '+r.mode+' page '+r.key+' instead.');
     });
     if(still.length === queue.length) break;   // nothing resolved this pass
     queue = still;
   }
   queue.forEach(function(f){
-    warns.push('Couldn’t place letter page <b>'+f.letter+'</b> after “'+f.after+'” — that page isn’t in the file. Left at the end.');
+    warns.push('Couldn’t place letter page <b>'+f.letter+'</b> '+f.mode+' “'+esc(f.after)+'” — that page isn’t in the file'+(followOf[f.after] ? ' (or the placements go round in a circle)' : '')+'. Left at the end.');
     seq.push(f.letter); placed[f.letter] = true;
   });
   letterKeys.forEach(function(k){
-    if(!placed[k]){ warns.push('Letter page <b>'+k+'</b> is in the file but has no placement instruction — left at the end.'); seq.push(k); }
+    if(!placed[k]){ warns.push('Letter page <b>'+esc(k)+'</b> is in the file but has no placement instruction — left at the end.'); seq.push(k); }
   });
-  var nPlaced = Object.keys(placed).length;
+  var nPlaced = ins.follows.filter(function(f){ return placed[f.letter]; }).length;
   if(nPlaced) notes.push('Slotted <b>'+nPlaced+'</b> letter page(s) into the running order.');
 
   // 4) renumber pages sequentially, preserving in-file row order inside each page
@@ -685,29 +937,28 @@ function processTarget(grid, instrText){
   });
   notes.push('Renumbered to <b>'+pageNo+'</b> sequential pages across <b>'+(rowsOut.length-1)+'</b> rows.');
 
-  // 5) validate against the sheet's own per-market page totals
+  // 5) validate against the sheet's own per-market page totals. The totals row may have been
+  //    written before the retailer's adjustments (matches the file as received) or after them
+  //    (matches the output) — either is fine; anything else is flagged.
   if(checksum){
-    var bad = [], shortfalls = [], checked = 0;
+    var bad = [], checked = 0, beforeAdj = 0;
+    var finalCount = marksByMarket(rowsOut.slice(1));
     marketCols.forEach(function(mk, idx){
       var col = idx + 2, expected = checksum[keep[col]];
       if(isEmpty(expected) || !/^\d+$/.test(String(expected).trim())) return;
       checked++;
-      var got = 0;
-      seq.forEach(function(k){ if(groups[k].rows.some(function(r){ return !isEmpty(r[col]); })) got++; });
-      if(parseInt(expected,10) !== got){ bad.push(mk+' (sheet '+expected+' vs output '+got+')'); shortfalls.push(parseInt(expected,10)-got); }
+      var exp = parseInt(expected,10), got = finalCount[col], raw = rawCount[col];
+      if(got === exp) return;
+      if(raw === exp && adjusted){ beforeAdj++; return; }
+      bad.push(esc(mk)+' (sheet '+exp+(raw !== got ? ', file '+raw : '')+', output '+got+')');
     });
-    var uniform = shortfalls.length && shortfalls.every(function(s){ return s === shortfalls[0]; });
-    if(!bad.length){
-      notes.push('Page-count check <b class="ok">passed</b> for all '+checked+' markets against the sheet’s totals row.');
-    } else if(uniform && pulledGroups && shortfalls[0] === pulledGroups){
-      notes.push('Page-count check: every market is short by exactly <b>'+pulledGroups+'</b> — the '+pulledGroups+' pulled page(s). The sheet’s totals row was written before the pull, so this is expected.');
-    } else if(uniform && bad.length === checked){
-      var s = shortfalls[0];
-      warns.push('Page-count check: <b>all '+checked+' markets</b> are '+(s>0?'short by':'over by')+' <b>'+Math.abs(s)+'</b> page(s) versus the sheet’s totals row'+
-                 (pulledGroups ? ' ('+pulledGroups+' page(s) were pulled)' : '')+'. Usually that means a letter page is missing a placement instruction, or a pull was missed.');
+    if(!checked) warns.push('The totals row above the header has no per-market numbers, so the page counts couldn’t be cross-checked.');
+    else if(!bad.length){
+      notes.push('Page-count check <b class="ok">passed</b> for all '+checked+' markets against the sheet’s totals row'+
+        (beforeAdj ? ' ('+beforeAdj+' match the totals as received — the totals row was written before the pulls/market changes, which is expected)' : '')+'.');
     } else {
       warns.push('Page-count check <b>failed</b> for '+bad.length+' of '+checked+' market(s): '+bad.slice(0,8).join(', ')+
-                 (bad.length>8 ? ' … and '+(bad.length-8)+' more' : '')+'. Re-read the adjustments before uploading.');
+                 (bad.length>8 ? ' … and '+(bad.length-8)+' more' : '')+'. Usually that means a pull or market change was missed or mistyped — re-read the adjustments before uploading.');
     }
   } else {
     warns.push('No per-market totals row found above the header, so the page counts couldn’t be cross-checked.');
@@ -1006,7 +1257,7 @@ function renderPsPanel(){
   $('psZoneTable').innerHTML = html;
 
   var info = 'Found <b>'+state.ps.zones.length+'</b> zone(s) and <b>'+state.ps.links.length+'</b> page link(s)';
-  if(state.ps.links.length) info += ': '+state.ps.links.map(function(l){ return esc(l.page); }).join(', ');
+  if(state.ps.links.length) info += ': '+state.ps.links.map(function(l){ return esc(l.label); }).join(', ');
   info += '.';
   $('psInfo').innerHTML = info;
 
@@ -1312,8 +1563,8 @@ function handleFile(file){
       updateRun();
       toast('Loaded '+file.name+'.');
     }catch(err){
-      var m = /password|encrypt/i.test(err.message) ? 'That file is password-protected — open it in Excel, remove the password and save a copy.'
-            : 'Couldn’t read that file ('+err.message+'). Try opening it in Excel and saving it again as .xlsx.';
+      var m = /password|encrypt/i.test((err && err.message) || '') ? 'That file is password-protected — open it in Excel, remove the password and save a copy.'
+            : 'Couldn’t read that file ('+((err && err.message) || err)+'). Try opening it in Excel and saving it again as .xlsx.';
       toast(m, true);
     }
   };
@@ -1326,8 +1577,8 @@ var dz=$('dropZone');
 dz.onclick = function(){ $('fileInput').click(); };
 $('fileInput').addEventListener('change', function(){ if(this.files[0]) handleFile(this.files[0]); this.value=''; });
 ['dragover','dragenter'].forEach(function(ev){ dz.addEventListener(ev, function(e){ e.preventDefault(); dz.classList.add('over'); }); });
-['dragleave','drop'].forEach(function(ev){ dz.addEventListener(ev, function(e){ e.preventDefault(); dz.classList.remove('over'); }); });
-dz.addEventListener('drop', function(e){ if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+['dragleave','drop'].forEach(function(ev){ dz.addEventListener(ev, function(e){ e.preventDefault(); if(ev === 'dragleave' && e.relatedTarget && dz.contains(e.relatedTarget)) return; dz.classList.remove('over'); }); });
+dz.addEventListener('drop', function(e){ var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if(f) handleFile(f); else toast('Drop a spreadsheet file, not text or a link.', true); });
 
 /* ==================================================================
  * Format selection
@@ -1356,13 +1607,8 @@ function renderInstrParse(){
   if(!txt.trim()){ $('instrParse').innerHTML = 'Optional — leave blank to just clean up the sheet with no adjustments.'; return; }
   var marketCols = null;
   if(state.grid){
-    for(var i=0;i<state.grid.length;i++){
-      var j = state.grid[i].map(function(c){ return isEmpty(c)?'':String(c).trim(); }).join('|').toLowerCase();
-      if(j.indexOf('pg number') !== -1 && j.indexOf('pdf') !== -1){
-        marketCols = state.grid[i].slice(2).map(function(c){ return isEmpty(c)?'':String(c).trim(); }).filter(Boolean);
-        break;
-      }
-    }
+    var hi = tFindHeader(state.grid);
+    if(hi !== -1) marketCols = (state.grid[hi]||[]).slice(2).map(function(c){ return isEmpty(c)?'':String(c).trim(); }).filter(Boolean);
   }
   var ins = parseTargetInstructions(txt, marketCols);
   var html = '';
@@ -1370,6 +1616,13 @@ function renderInstrParse(){
     html += '<div>Understood <b>'+ins.parsed.length+'</b> instruction(s):</div><div class="chipline">';
     ins.parsed.forEach(function(p){ html += '<span class="tag '+p.kind+'">'+esc(p.text)+'</span>'; });
     html += '</div>';
+  }
+  if(ins.pull.length || ins.pullLetters.length)
+    html += '<div style="margin-top:8px">Pages to pull: <b>'+ins.pull.concat(ins.pullLetters).join(', ')+'</b></div>';
+  if(ins.problems.length){
+    html += '<div style="margin-top:8px"><span class="warn">Needs a look</span>:</div><ul class="notes" style="margin-top:6px">';
+    ins.problems.forEach(function(p){ html += '<li class="n-warn">'+p+'</li>'; });
+    html += '</ul>';
   }
   if(ins.unparsed.length){
     html += '<div style="margin-top:8px"><span class="warn">Not understood</span> — these lines will be ignored:</div><div class="chipline">';
@@ -1425,20 +1678,25 @@ $('runBtn').onclick = function(){
     toast('Conversion complete.');
   }catch(err){
     resetResult();
-    $('runNotes').innerHTML = '<li class="n-bad">'+esc(err.message)+'</li>';
-    toast(err.message, true);
+    var msg = (err && err.message) ? err.message : String(err);
+    // our own checks throw plain Error with a readable message; a TypeError etc. means a layout we didn't expect
+    if(!(err instanceof Error) || err instanceof TypeError || err instanceof RangeError || err instanceof ReferenceError || err instanceof SyntaxError) msg = 'Something unexpected went wrong ('+msg+'). The file may not be laid out the way this retailer usually sends it.';
+    $('runNotes').innerHTML = '<li class="n-bad">'+esc(msg)+'</li>';
+    toast(msg, true);
+    if(window.console) console.error(err);
   }
 };
 
+function colName(c){ var s = ''; c++; while(c > 0){ var m = (c-1) % 26; s = String.fromCharCode(65+m) + s; c = Math.floor((c-1)/26); } return s; }
 function tableHtml(rows, headerRow, maxRows, maxCols){
   var html = '<table><thead><tr>';
-  var width = Math.min(maxCols, Math.max.apply(null, rows.map(function(r){ return r.length; })));
+  var width = Math.min(maxCols, gridWidth(rows));
   var body = rows;
   if(headerRow && rows.length >= 1){
     body = rows.slice(1);
     for(var c=0;c<width;c++) html += '<th>'+esc(isEmpty(rows[0][c])?'':rows[0][c])+'</th>';
   } else {
-    for(var c=0;c<width;c++) html += '<th>'+esc(String.fromCharCode(65+(c%26)))+(c>=26?Math.floor(c/26):'')+'</th>';
+    for(var c=0;c<width;c++) html += '<th>'+colName(c)+'</th>';
   }
   html += '</tr></thead><tbody>';
   body.slice(0, maxRows).forEach(function(r){
